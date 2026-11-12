@@ -179,12 +179,13 @@ pub struct ImportStyle {
     pub image_path: Option<String>,
 }
 
-/// Feedback on a style prompt while the user is still typing it.
+/// Advice on a style prompt while the user is still typing it. Nothing here
+/// stops the style from being saved.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCheck {
-    /// Wording that will stop the style from being saved.
-    pub errors: Vec<String>,
+    /// Wording that may lead the AI to change the jewelry.
+    pub warnings: Vec<String>,
     /// Words that may describe the jewelry instead of the scene.
     pub item_words: Vec<String>,
 }
@@ -421,7 +422,7 @@ impl Studio {
 
     pub fn check_style_prompt(&self, prompt: &str) -> PromptCheck {
         PromptCheck {
-            errors: guardrails::check(prompt)
+            warnings: guardrails::check(prompt)
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
@@ -844,9 +845,11 @@ pub(crate) mod tests {
         assert!(refused(&studio, args(&item_id, &["gone"], 1)).contains("no longer exists"));
         assert!(refused(&studio, args("missing", &["black-velvet"], 1)).contains("no longer"));
 
+        // A note is never refused; it is sent as typed.
         let mut with_note = args(&item_id, &["black-velvet"], 1);
         with_note.note = Some("show it on a hand".into());
-        assert!(refused(&studio, with_note).contains("not allowed"));
+        let plan = studio.plan_generation(&with_note).unwrap();
+        assert!(plan.jobs[0].request.prompt.contains("show it on a hand"));
 
         studio
             .import_style(ImportStyle {
@@ -993,16 +996,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn prompt_feedback_separates_errors_from_advice() {
+    fn prompt_advice_points_out_risky_words() {
         let dir = temp_dir("prompt-check");
-        let studio = Studio::open(dir.join("data")).unwrap();
+        let mut studio = Studio::open(dir.join("data")).unwrap();
 
         let check = studio.check_style_prompt("A gold ring worn on a hand");
-        assert_eq!(check.errors.len(), 2);
+        assert_eq!(check.warnings.len(), 2);
         assert_eq!(check.item_words, vec!["ring", "gold"]);
 
         let clean = studio.check_style_prompt("Place the {item} on pale linen, soft light");
-        assert!(clean.errors.is_empty() && clean.item_words.is_empty());
+        assert!(clean.warnings.is_empty() && clean.item_words.is_empty());
+
+        // Advice only: the same wording saves without complaint.
+        studio
+            .import_style(style_input(
+                "On A Hand",
+                "A gold ring worn on a hand",
+                Look::Photo,
+            ))
+            .unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 

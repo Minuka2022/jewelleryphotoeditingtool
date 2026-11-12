@@ -10,7 +10,7 @@
 # Bump "version" whenever you change the wording, so every generated image
 # records which wording produced it.
 
-version = 2
+version = 3
 
 [global]
 role = "You are a professional jewelry product photographer and retoucher."

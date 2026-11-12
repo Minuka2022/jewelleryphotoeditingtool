@@ -1,8 +1,8 @@
 //! The editable library: master prompt, categories, styles and prices.
 //!
 //! Everything here is data in `library/*.toml`, so wording can be tuned
-//! without rebuilding. Loading validates it, including running every style
-//! prompt through the guardrails.
+//! without rebuilding. Loading checks the structure of each file; the wording
+//! of a style prompt is entirely up to its author.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -12,7 +12,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::cost::Pricing;
-use crate::guardrails;
 use crate::reference::{prepare_reference, PrepareOptions};
 
 /// Replaced with the category's noun when a prompt is built.
@@ -483,21 +482,15 @@ fn validate_style(
     if style.name.trim().is_empty() {
         return Err("name is empty".into());
     }
+    // Any wording is allowed. {item} only marks where the jewelry's name goes,
+    // and is added automatically when a user's style leaves it out.
     if !style.prompt.contains(ITEM_PLACEHOLDER) {
         return Err("prompt must mention {item}".into());
     }
-    check_placeholders(&style.prompt)?;
     for category in &style.categories {
         if !category_ids.contains(category.as_str()) {
             return Err(format!("unknown category \"{category}\""));
         }
-    }
-    let violations = guardrails::check(&style.prompt);
-    if !violations.is_empty() {
-        return Err(format!(
-            "prompt wording is not allowed: {}. A style may describe only the scene around the item.",
-            guardrails::describe(&violations)
-        ));
     }
     Ok(())
 }
@@ -622,11 +615,8 @@ pub(crate) mod tests {
         assert_eq!(saved.image.as_deref(), Some("rose-petals.jpg"));
 
         let bad = [
-            (
-                "rose-petals",
-                new_style("Romantic Petals", "worn on a hand"),
-            ),
             ("rose-petals", new_style("  ", "Place the {item} on silk.")),
+            ("rose-petals", new_style("Romantic Petals", "   ")),
             (
                 "no-such-style",
                 new_style("Other", "Place the {item} on silk."),
@@ -712,7 +702,6 @@ pub(crate) mod tests {
     fn unacceptable_imports_are_rejected_and_nothing_is_saved() {
         let (dir, mut library) = writable_library("import-reject");
         let rejected = [
-            new_style("Worn", "The {item} worn on a hand, soft light."),
             new_style("Black Velvet", "Place the {item} on velvet."),
             new_style("???", "Place the {item} on velvet."),
             new_style("Empty", "   "),
@@ -777,19 +766,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn rejects_a_style_that_changes_the_viewpoint() {
-        let error = check(&style("Show the {item} in a side view on linen.")).unwrap_err();
-        assert!(error.contains("side view"), "{error}");
+    fn any_wording_is_accepted_in_a_style() {
+        for prompt in [
+            "Show the {item} in a side view, worn on a model's hand, gold light.",
+            "Place the {item} on {surface}, rotate the light, add diamonds of dew.",
+        ] {
+            assert_eq!(check(&style(prompt)), Ok(()), "{prompt}");
+        }
     }
 
     #[test]
-    fn rejects_a_style_without_the_item() {
+    fn rejects_a_style_file_without_the_item() {
         assert!(check(&style("Grey linen, soft light.")).is_err());
     }
 
     #[test]
-    fn rejects_unknown_placeholders() {
-        assert!(check(&style("Place the {item} on {surface}.")).is_err());
+    fn a_user_style_may_use_any_wording_and_gets_the_item_added() {
+        let (dir, mut library) = writable_library("free-wording");
+        let style = library
+            .import_style(
+                &dir,
+                new_style("On A Hand", "worn on a model's hand, side view, warm light"),
+            )
+            .unwrap();
+        assert_eq!(
+            style.prompt,
+            "Place the {item} in this scene. worn on a model's hand, side view, warm light"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

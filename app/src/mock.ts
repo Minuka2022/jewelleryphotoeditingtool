@@ -149,7 +149,7 @@ export const mockApi: Api = {
   },
   exportOutputs: async (selections) => selections.length,
   checkStylePrompt: async (prompt) => ({
-    errors: /\b(hand|worn|side view|rotate)\b/i.test(prompt)
+    warnings: /\b(hand|worn|side view|rotate)\b/i.test(prompt)
       ? ['"hand" shows the item worn or on a body']
       : [],
     itemWords: ['ring', 'gold', 'diamond'].filter((word) => new RegExp(`\\b${word}\\b`, 'i').test(prompt)),

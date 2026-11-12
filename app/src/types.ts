@@ -99,8 +99,9 @@ export interface ImportedStyle {
   library: LibraryInfo;
 }
 
+/** Advice only: nothing here stops a style from being saved. */
 export interface PromptCheck {
-  errors: string[];
+  warnings: string[];
   itemWords: string[];
 }
 

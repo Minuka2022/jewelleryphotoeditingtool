@@ -130,7 +130,6 @@ function StyleDialog() {
     }
   };
 
-  const blocked = Boolean(check?.errors.length);
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -153,7 +152,7 @@ function StyleDialog() {
             </span>
           )}
           <Button onClick={close}>Cancel</Button>
-          <Button variant="primary" disabled={saving || blocked || !name.trim() || !prompt.trim()} onClick={save}>
+          <Button variant="primary" disabled={saving || !name.trim() || !prompt.trim()} onClick={save}>
             {editing ? 'Save changes' : 'Save style'}
           </Button>
         </>
@@ -186,31 +185,33 @@ function StyleDialog() {
       </Field>
 
       <Field
-        label="Prompt: describe the scene"
-        hint="Describe only the surroundings: surface, background, props, lighting and mood. Write {item} where the jewelry goes. Do not describe the jewelry itself."
+        label="Prompt"
+        hint="Write anything you like. Write {item} where the jewelry goes, or leave it out and it is added for you. The app's own rules still ask the AI to keep your piece exactly as it is."
       >
         <textarea
-          className={cx(inputClass, 'h-28 resize-none leading-relaxed')}
+          className={cx(inputClass, 'h-32 resize-y leading-relaxed')}
           placeholder="Place the {item} on scattered pale pink rose petals over ivory silk. Soft window light from the left, gentle shadows, romantic mood."
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
         />
       </Field>
-      {check && check.errors.length > 0 && (
-        <div className="rounded border border-bad/50 bg-bad/10 px-3 py-2 text-bad">
-          This wording cannot be used, because it would change the jewelry instead of the scene:
+      {check && (check.warnings.length > 0 || check.itemWords.length > 0) && (
+        <div className="rounded border border-[#c9a23f]/50 bg-[#c9a23f]/10 px-3 py-2 leading-snug text-[#e3c16a]">
+          <strong>Tip, not a rule:</strong> some words here can make the AI change the piece itself, not just
+          the scene.
           <ul className="mt-1 list-disc pl-4">
-            {check.errors.map((problem) => (
-              <li key={problem}>{problem}</li>
+            {check.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
             ))}
+            {check.itemWords.length > 0 && (
+              <li>
+                {check.itemWords.join(', ')} describe jewelry. If they mean your piece, writing {'{item}'} instead
+                is safer.
+              </li>
+            )}
           </ul>
+          You can still save the style as it is.
         </div>
-      )}
-      {check && check.errors.length === 0 && check.itemWords.length > 0 && (
-        <p className="rounded border border-[#c9a23f]/50 bg-[#c9a23f]/10 px-3 py-2 text-[#e3c16a]">
-          These words describe jewelry: {check.itemWords.join(', ')}. If they refer to the piece itself, remove them
-          and write {'{item}'} instead, or the AI may change your piece to match.
-        </p>
       )}
 
       <Field label="Finish" hint={finishes.find(([id]) => id === look)?.[2]}>

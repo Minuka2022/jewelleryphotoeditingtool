@@ -1,8 +1,8 @@
-//! Rejects wording that would ask the model to change the jewelry itself
-//! instead of the scene around it. Applied to style prompts and user notes.
+//! Points out wording that may lead the model to change the jewelry itself
+//! instead of the scene around it.
 //!
-//! The master prompt is not checked: it legitimately names these things in
-//! order to forbid them.
+//! This is advice shown while a style is written, never a restriction:
+//! nothing here stops a style or a note from being saved or sent.
 
 use std::fmt;
 

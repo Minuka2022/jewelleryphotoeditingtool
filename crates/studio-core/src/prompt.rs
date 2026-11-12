@@ -3,7 +3,6 @@
 
 use serde::Serialize;
 
-use crate::guardrails;
 use crate::library::{JewelryCategory, Look, MasterPrompts, StyleTemplate, ITEM_PLACEHOLDER};
 
 pub struct PromptRequest<'a> {
@@ -31,8 +30,6 @@ pub enum PromptError {
     NoReference,
     #[error("style \"{style}\" is not set up for category \"{category}\"")]
     StyleNotForCategory { style: String, category: String },
-    #[error("the note is not allowed: {0}. A note may adjust only the scene around the item.")]
-    NoteRejected(String),
 }
 
 pub fn build_prompt(request: &PromptRequest<'_>) -> Result<BuiltPrompt, PromptError> {
@@ -52,16 +49,11 @@ pub fn build_prompt(request: &PromptRequest<'_>) -> Result<BuiltPrompt, PromptEr
             category: category.id.clone(),
         });
     }
+    // The note is sent exactly as typed.
     let note = request
         .user_note
         .map(str::trim)
         .filter(|note| !note.is_empty());
-    if let Some(note) = note {
-        let violations = guardrails::check(note);
-        if !violations.is_empty() {
-            return Err(PromptError::NoteRejected(guardrails::describe(&violations)));
-        }
-    }
 
     let fill = |text: &str| text.trim().replace(ITEM_PLACEHOLDER, category.noun.trim());
     let global = &master.global;
@@ -104,7 +96,8 @@ pub fn build_prompt(request: &PromptRequest<'_>) -> Result<BuiltPrompt, PromptEr
         .filter(|entry| !entry.is_empty())
         .collect();
     if !avoid.is_empty() {
-        text.push_str("\n\nAVOID: ");
+        // These are defaults: the user's scene or note can ask for any of them.
+        text.push_str("\n\nAVOID (unless the scene or the note asks for it): ");
         text.push_str(&avoid.join("; "));
         text.push('.');
     }
@@ -149,7 +142,7 @@ mod tests {
             position("Place the ring on rich black velvet"),
             position("EXTRA NOTE"),
             position("slightly warmer light"),
-            position("AVOID: "),
+            position("AVOID (unless the scene or the note asks for it): "),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
         assert!(!text.contains('{') && !text.contains('}'), "{text}");
@@ -231,17 +224,18 @@ mod tests {
     }
 
     #[test]
-    fn a_note_that_changes_the_item_is_rejected() {
+    fn a_note_is_sent_exactly_as_typed() {
         let library = shipped_library();
-        let error = build_prompt(&PromptRequest {
+        let note = "show it on a model's hand, side view, gold rim light";
+        let prompt = build_prompt(&PromptRequest {
             master: &library.master,
             category: library.category("ring").unwrap(),
             style: library.style("studio-white").unwrap(),
             reference_count: 1,
-            user_note: Some("rotate it and add diamonds"),
+            user_note: Some(note),
         })
-        .unwrap_err();
-        assert!(matches!(error, PromptError::NoteRejected(_)));
+        .unwrap();
+        assert!(prompt.text.contains(note), "{}", prompt.text);
     }
 
     #[test]

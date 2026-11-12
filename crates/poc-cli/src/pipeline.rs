@@ -550,16 +550,19 @@ mod tests {
     }
 
     #[test]
-    fn a_note_that_changes_the_item_stops_the_plan() {
+    fn a_note_goes_into_every_prompt_as_typed() {
         let input = temp_dir("plan-note");
         write_photo(&input.join("ring").join("a.jpg"));
         let library = library();
         let styles: Vec<&StyleTemplate> = library.styles.iter().collect();
 
         let items = discover_items(&input, &library, None).unwrap();
-        assert!(plan(items.clone(), &styles, &library, Some("show a side view")).is_err());
-        let ok = plan(items, &styles, &library, Some("warmer light")).unwrap();
-        assert_eq!(ok.image_count(3), library.styles.len() * 3);
+        let planned = plan(items, &styles, &library, Some("show a side view")).unwrap();
+        assert_eq!(planned.image_count(3), library.styles.len() * 3);
+        assert!(planned.items[0]
+            .styles
+            .iter()
+            .all(|style| style.prompt.text.contains("show a side view")));
 
         fs::remove_dir_all(&input).unwrap();
     }
