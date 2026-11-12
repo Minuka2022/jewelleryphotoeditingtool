@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/studio-core", "crates/studio-app", "crates/poc-cli", "crates/web", "app/src-tauri"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 publish = false
 
