@@ -4,10 +4,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { api, errorText } from './api';
 import type {
+  Crop,
   ImportStyle,
   ItemInfo,
   LibraryInfo,
   OutputInfo,
+  OutputRef,
   OutputStatus,
   Settings,
   SettingsInfo,
@@ -16,8 +18,42 @@ import type {
 } from './types';
 
 export type CompareMode = 'single' | 'split' | 'slider';
-export type Tool = 'hand' | 'zoom';
-export type DialogName = 'settings' | 'import-style' | 'shortcuts';
+export type Tool = 'hand' | 'zoom' | 'crop';
+export type DialogName = 'settings' | 'import-style' | 'shortcuts' | 'export';
+
+export const FULL_CROP: Crop = { x: 0, y: 0, width: 1, height: 1 };
+
+/** Crop shapes offered in the crop tool, as width:height. "original" keeps the image's own shape. */
+export const CROP_RATIOS: { id: string; label: string; ratio: number | 'original' | null }[] = [
+  { id: 'free', label: 'Free', ratio: null },
+  { id: 'original', label: 'Original', ratio: 'original' },
+  { id: '1:1', label: '1 : 1 (square)', ratio: 1 },
+  { id: '4:5', label: '4 : 5', ratio: 4 / 5 },
+  { id: '3:4', label: '3 : 4', ratio: 3 / 4 },
+  { id: '2:3', label: '2 : 3', ratio: 2 / 3 },
+  { id: '4:3', label: '4 : 3', ratio: 4 / 3 },
+  { id: '3:2', label: '3 : 2', ratio: 3 / 2 },
+  { id: '16:9', label: '16 : 9', ratio: 16 / 9 },
+];
+
+/** An unsaved crop being adjusted in the crop tool. */
+export interface CropDraft {
+  itemId: string;
+  outputId: string;
+  crop: Crop;
+  ratioId: string;
+  /** The image's full size in pixels, once it has loaded. */
+  natural: { width: number; height: number } | null;
+}
+
+/** The largest crop of the given pixel ratio that fits the image, centred. */
+export function centredCrop(ratio: number, natural: { width: number; height: number }): Crop {
+  // In fractions, a pixel ratio r becomes r * height / width.
+  const fractionRatio = (ratio * natural.height) / natural.width;
+  const width = Math.min(1, fractionRatio);
+  const height = width / fractionRatio;
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
 
 /** Zoom 1 means "fit the window"; x and y are the pan offset in pixels. */
 export interface View {
@@ -72,7 +108,8 @@ function useController() {
   const [lastCategory, setLastCategory] = useState('jewelry');
 
   const [compare, setCompare] = useState<CompareMode>('split');
-  const [tool, setTool] = useState<Tool>('hand');
+  const [tool, setToolState] = useState<Tool>('hand');
+  const [cropDraft, setCropDraft] = useState<CropDraft | null>(null);
   const [view, setView] = useState<View>(FIT);
   const [zoomPercent, setZoomPercent] = useState(100);
 
@@ -341,25 +378,91 @@ function useController() {
     void runGeneration();
   }, [activeItem, isGenerating, settings, usableStyles, plannedCost, plannedImages, notify, runGeneration]);
 
-  const exportApproved = useCallback(async () => {
-    const selections = items.flatMap((item) =>
-      item.outputs
-        .filter((output) => output.status === 'approved')
-        .map((output) => ({ itemId: item.id, outputId: output.id })),
-    );
-    if (selections.length === 0) {
-      notify('info', 'Nothing to export yet. Approve the images you want to keep (press A), then export.');
+  /** Every approved image, across all photos. */
+  const approvedOutputs: OutputRef[] = useMemo(
+    () =>
+      items.flatMap((item) =>
+        item.outputs
+          .filter((output) => output.status === 'approved')
+          .map((output) => ({ itemId: item.id, outputId: output.id })),
+      ),
+    [items],
+  );
+
+  const openExport = useCallback(() => {
+    if (!viewedOutput && approvedOutputs.length === 0) {
+      notify(
+        'info',
+        'Choose a generated image in the filmstrip to export it, or approve images (press A) to export them together.',
+      );
       return;
     }
+    setDialog('export');
+  }, [viewedOutput, approvedOutputs, notify]);
+
+  // --- Crop tool -----------------------------------------------------------
+
+  const startCrop = useCallback(() => {
+    if (!activeItem || !viewedOutput) {
+      notify('info', 'Choose a generated image in the filmstrip first. The reference photo cannot be cropped.');
+      return;
+    }
+    setCropDraft({
+      itemId: activeItem.id,
+      outputId: viewedOutput.id,
+      crop: viewedOutput.crop ?? FULL_CROP,
+      ratioId: 'free',
+      natural: null,
+    });
+    setView(FIT);
+    setToolState('crop');
+  }, [activeItem, viewedOutput, notify]);
+
+  const cancelCrop = useCallback(() => {
+    setCropDraft(null);
+    setToolState('hand');
+  }, []);
+
+  const setTool = useCallback(
+    (next: Tool) => {
+      if (next === 'crop') startCrop();
+      else {
+        setCropDraft(null);
+        setToolState(next);
+      }
+    },
+    [startCrop],
+  );
+
+  const applyCrop = useCallback(async () => {
+    if (!cropDraft) return;
+    const { itemId, outputId, crop } = cropDraft;
+    const full = crop.x < 1e-4 && crop.y < 1e-4 && crop.width > 0.9999 && crop.height > 0.9999;
     try {
-      const destination = await api.pickFolder();
-      if (!destination) return;
-      const copied = await api.exportOutputs(selections, destination);
-      notify('info', `Exported ${copied} image(s) to ${destination}`);
+      putItem(await api.setOutputCrop(itemId, outputId, full ? null : crop));
+      cancelCrop();
     } catch (error) {
       fail(error);
     }
-  }, [items, notify, fail]);
+  }, [cropDraft, putItem, cancelCrop, fail]);
+
+  const removeCrop = useCallback(
+    async (itemId: string, outputId: string) => {
+      try {
+        putItem(await api.setOutputCrop(itemId, outputId, null));
+      } catch (error) {
+        fail(error);
+      }
+    },
+    [putItem, fail],
+  );
+
+  // Leaving the image being cropped abandons the unsaved crop.
+  useEffect(() => {
+    if (cropDraft && (cropDraft.itemId !== activeItem?.id || cropDraft.outputId !== viewedOutput?.id)) {
+      cancelCrop();
+    }
+  }, [cropDraft, activeItem, viewedOutput, cancelCrop]);
 
   /** Opens the style window: empty to add a style, or filled in to edit one. */
   const openStyleDialog = useCallback((style?: StyleInfo) => {
@@ -479,7 +582,14 @@ function useController() {
     toggleStyle,
     changeSettings,
     generate,
-    exportApproved,
+    approvedOutputs,
+    openExport,
+    cropDraft,
+    setCropDraft,
+    startCrop,
+    cancelCrop,
+    applyCrop,
+    removeCrop,
     styleFilter,
     setStyleFilter,
     editingStyle,

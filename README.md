@@ -25,7 +25,14 @@ each result with the original, approve the good ones and export them.
 5. **Review**: click a result in the filmstrip. Use side by side (2) or the
    slider (3), and the mouse wheel to zoom into stones and prongs.
 6. **Approve** the faithful ones (A), **reject** (X) or delete the rest.
-7. **File > Export Approved** copies the approved images to a folder.
+7. **Crop** (C): drag the frame or its handles, pick a shape (square, 4:5,
+   16:9 ...), then Enter. The original file is kept, so a crop can be changed
+   or removed (Image > Remove Crop) at any time.
+8. **File > Export As** (Ctrl+Shift+E): export this image or all approved
+   ones as JPEG (quality 1 to 100; full colour detail at 90 and above),
+   lossless PNG or lossless WebP, at the original size or a new width,
+   with Lanczos or bicubic resampling and 72, 150 or 300 ppi. The pixel size
+   and file size are shown before you export.
 
 Help > Keyboard Shortcuts lists every shortcut.
 

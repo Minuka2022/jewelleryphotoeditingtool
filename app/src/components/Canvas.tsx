@@ -2,10 +2,11 @@
 // zoom, pan and three ways of comparing the two.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import { api } from '../api';
-import { FIT, useStudio } from '../store';
+import { CROP_RATIOS, FIT, useStudio } from '../store';
 import type { View } from '../store';
+import type { Crop } from '../types';
 import { Button, Spinner, cx } from '../ui';
 
 const MIN_ZOOM = 0.25;
@@ -75,6 +76,195 @@ function Picture({
   );
 }
 
+type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move';
+const CORNERS: Handle[] = ['nw', 'ne', 'se', 'sw'];
+const EDGES: Handle[] = ['n', 'e', 's', 'w'];
+const MIN_CROP = 0.02;
+const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
+
+/**
+ * Moves one handle of a crop by (dx, dy), in fractions of the image size.
+ * `ratio` is the locked width-to-height ratio in fractions, or null for free.
+ */
+function dragCrop(start: Crop, handle: Handle, dx: number, dy: number, ratio: number | null): Crop {
+  if (handle === 'move') {
+    return {
+      ...start,
+      x: clamp(start.x + dx, 0, 1 - start.width),
+      y: clamp(start.y + dy, 0, 1 - start.height),
+    };
+  }
+  const west = handle.includes('w');
+  const east = handle.includes('e');
+  const north = handle.includes('n');
+  const south = handle.includes('s');
+  let left = start.x;
+  let top = start.y;
+  let right = start.x + start.width;
+  let bottom = start.y + start.height;
+  if (west) left = clamp(left + dx, 0, right - MIN_CROP);
+  if (east) right = clamp(right + dx, left + MIN_CROP, 1);
+  if (north) top = clamp(top + dy, 0, bottom - MIN_CROP);
+  if (south) bottom = clamp(bottom + dy, top + MIN_CROP, 1);
+  if (ratio === null) return { x: left, y: top, width: right - left, height: bottom - top };
+
+  // Locked shape (corners only): grow from the opposite corner, following
+  // whichever direction the pointer moved more, and stop at the image edge.
+  const anchorX = west ? start.x + start.width : start.x;
+  const anchorY = north ? start.y + start.height : start.y;
+  let width = right - left;
+  const height = bottom - top;
+  if (width / ratio < height) width = height * ratio;
+  const limit = Math.min(west ? anchorX : 1 - anchorX, (north ? anchorY : 1 - anchorY) * ratio);
+  const smallest = Math.min(Math.max(MIN_CROP, MIN_CROP * ratio), limit);
+  width = clamp(width, smallest, limit);
+  const lockedHeight = width / ratio;
+  return {
+    x: west ? anchorX - width : anchorX,
+    y: north ? anchorY - lockedHeight : anchorY,
+    width,
+    height: lockedHeight,
+  };
+}
+
+function handlePosition(handle: Handle): CSSProperties {
+  const at = (value: string) => `calc(${value} - 6px)`;
+  const x = handle.includes('w') ? '0%' : handle.includes('e') ? '100%' : '50%';
+  const y = handle.includes('n') ? '0%' : handle.includes('s') ? '100%' : '50%';
+  return { left: at(x), top: at(y) };
+}
+
+const handleCursor: Record<Handle, string> = {
+  nw: 'nwse-resize',
+  se: 'nwse-resize',
+  ne: 'nesw-resize',
+  sw: 'nesw-resize',
+  n: 'ns-resize',
+  s: 'ns-resize',
+  e: 'ew-resize',
+  w: 'ew-resize',
+  move: 'move',
+};
+
+/** The crop tool: the whole image with a rectangle to drag. */
+function CropEditor({ src }: { src: string }) {
+  const { cropDraft, setCropDraft } = useStudio();
+  const pane = useRef<HTMLDivElement>(null);
+  const overlay = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ handle: Handle; x: number; y: number; start: Crop } | null>(null);
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  const natural = cropDraft?.natural ?? null;
+
+  const noteSize = (image: HTMLImageElement | null) => {
+    if (!image || !image.complete || image.naturalWidth === 0) return;
+    const size = { width: image.naturalWidth, height: image.naturalHeight };
+    setCropDraft((draft) => (draft && !draft.natural ? { ...draft, natural: size } : draft));
+  };
+
+  // Fit the whole image inside the work area.
+  useEffect(() => {
+    const element = pane.current;
+    if (!element || !natural) return;
+    const measure = () => {
+      const scale = Math.min(
+        (element.clientWidth - 64) / natural.width,
+        (element.clientHeight - 64) / natural.height,
+      );
+      setBox({ width: natural.width * scale, height: natural.height * scale });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, [natural]);
+
+  if (!cropDraft) return null;
+  const { crop } = cropDraft;
+  const choice = CROP_RATIOS.find((option) => option.id === cropDraft.ratioId)?.ratio ?? null;
+  const pixelRatio = choice === 'original' ? (natural ? natural.width / natural.height : null) : choice;
+  const ratio = pixelRatio !== null && natural ? (pixelRatio * natural.height) / natural.width : null;
+
+  const begin = (handle: Handle) => (event: ReactPointerEvent) => {
+    event.stopPropagation();
+    overlay.current?.setPointerCapture(event.pointerId);
+    drag.current = { handle, x: event.clientX, y: event.clientY, start: crop };
+  };
+  const move = (event: ReactPointerEvent) => {
+    const current = drag.current;
+    if (!current || !box) return;
+    const dx = (event.clientX - current.x) / box.width;
+    const dy = (event.clientY - current.y) / box.height;
+    const next = dragCrop(current.start, current.handle, dx, dy, ratio);
+    setCropDraft((draft) => (draft ? { ...draft, crop: next } : draft));
+  };
+  const end = () => {
+    drag.current = null;
+  };
+  const percent = (value: number) => `${value * 100}%`;
+  const handles = ratio === null ? [...CORNERS, ...EDGES] : CORNERS;
+
+  return (
+    <div ref={pane} className="relative flex min-h-0 flex-1 items-center justify-center bg-canvas p-8">
+      <div className="relative" style={box ?? undefined}>
+        <img
+          ref={noteSize}
+          src={src}
+          alt="Image being cropped"
+          draggable={false}
+          onLoad={(event) => noteSize(event.currentTarget)}
+          className="block"
+          style={box ? { width: '100%', height: '100%' } : { maxWidth: '100%', visibility: 'hidden' }}
+        />
+        {box && (
+          <div
+            ref={overlay}
+            data-crop-overlay
+            className="absolute inset-0 overflow-hidden"
+            onPointerMove={move}
+            onPointerUp={end}
+            onPointerCancel={end}
+          >
+            <div
+              data-crop-rect
+              className="absolute border border-white/90"
+              style={{
+                left: percent(crop.x),
+                top: percent(crop.y),
+                width: percent(crop.width),
+                height: percent(crop.height),
+                boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.62)',
+                cursor: handleCursor.move,
+              }}
+              onPointerDown={begin('move')}
+            >
+              <div className="pointer-events-none absolute inset-0">
+                {[1, 2].map((third) => (
+                  <div key={`v${third}`} className="absolute top-0 bottom-0 w-px bg-white/35" style={{ left: `${(third * 100) / 3}%` }} />
+                ))}
+                {[1, 2].map((third) => (
+                  <div key={`h${third}`} className="absolute right-0 left-0 h-px bg-white/35" style={{ top: `${(third * 100) / 3}%` }} />
+                ))}
+              </div>
+              {handles.map((handle) => (
+                <span
+                  key={handle}
+                  data-handle={handle}
+                  onPointerDown={begin(handle)}
+                  className="absolute h-3 w-3 border border-black/70 bg-white"
+                  style={{ ...handlePosition(handle), cursor: handleCursor[handle] }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <p className="pointer-events-none absolute bottom-3 rounded bg-black/60 px-3 py-1 text-dim">
+        Drag the frame or its handles. Enter applies, Esc cancels. The original file is never changed.
+      </p>
+    </div>
+  );
+}
+
 function Tag({ children, side = 'left' }: { children: string; side?: 'left' | 'right' }) {
   return (
     <span
@@ -115,7 +305,7 @@ function EmptyState() {
 }
 
 export function Canvas() {
-  const { activeItem, viewedOutput, compare, tool, view, setView, setZoomPercent, busy } = useStudio();
+  const { activeItem, viewedOutput, compare, tool, view, setView, setZoomPercent, busy, cropDraft } = useStudio();
   const [divider, setDivider] = useState(50);
   const [fitScale, setFitScale] = useState(1);
   const [panning, setPanning] = useState(false);
@@ -128,6 +318,8 @@ export function Canvas() {
   const onFit = useCallback((scale: number) => setFitScale(scale), []);
 
   if (!activeItem) return <EmptyState />;
+  // The crop tool always works on the uncropped original.
+  if (tool === 'crop' && cropDraft && viewedOutput) return <CropEditor src={api.fileSrc(viewedOutput.originalPath)} />;
 
   const onWheel = (event: ReactWheelEvent) => {
     const pane = paneUnder(event.target);

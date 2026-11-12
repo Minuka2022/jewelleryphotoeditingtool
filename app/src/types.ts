@@ -51,6 +51,37 @@ export interface SettingsInfo extends Settings {
   hasApiKey: boolean;
 }
 
+/** A crop in fractions (0 to 1) of the image's width and height. */
+export interface Crop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type ExportFormat = 'jpeg' | 'png' | 'webp';
+export type Resample = 'lanczos' | 'bicubic' | 'bilinear' | 'nearest';
+
+export interface ExportOptions {
+  format: ExportFormat;
+  /** 1 to 100; JPEG only. */
+  quality: number;
+  /** Width in pixels, or null to keep the size. Height follows the proportions. */
+  width: number | null;
+  resample: Resample;
+  /** Pixels per inch written into JPEG files. */
+  dpi: number;
+}
+
+export interface ExportEstimate {
+  width: number;
+  height: number;
+  /** Size after cropping, before resizing. */
+  sourceWidth: number;
+  sourceHeight: number;
+  bytes: number;
+}
+
 export interface OutputInfo {
   id: string;
   runId: string;
@@ -63,8 +94,12 @@ export interface OutputInfo {
   imageSize: string;
   costUsd: number | null;
   note: string | null;
-  /** Full path of the image file. */
+  /** The kept part of the image; the file itself is never changed. */
+  crop?: Crop | null;
+  /** Full path of the image to show: a cropped copy when there is a crop. */
   path: string;
+  /** Full path of the uncropped original, used by the crop tool. */
+  originalPath: string;
 }
 
 export interface ItemInfo {

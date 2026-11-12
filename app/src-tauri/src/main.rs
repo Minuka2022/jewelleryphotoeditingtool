@@ -10,14 +10,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
+use studio_core::export::{Crop, ExportOptions};
 use studio_core::gemini::GeminiClient;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::store::OutputStatus;
 use crate::studio::{
-    AddItemsResult, GenerateArgs, ImportStyle, ItemInfo, LibraryInfo, OutputRef, PromptCheck,
-    Settings, Studio,
+    crop_preview, run_export, AddItemsResult, ExportEstimate, GenerateArgs, ImportStyle, ItemInfo,
+    LibraryInfo, OutputRef, PromptCheck, Settings, Studio,
 };
 
 type AppState = Mutex<Studio>;
@@ -163,13 +164,51 @@ fn remove_output(
     lock(&state)?.remove_output(&item_id, &output_id)
 }
 
+/// Saves a crop (or removes it with `None`) and makes the copy shown on screen.
 #[tauri::command]
-fn export_outputs(
+async fn set_output_crop(
+    state: State<'_, AppState>,
+    item_id: String,
+    output_id: String,
+    crop: Option<Crop>,
+) -> Result<ItemInfo, String> {
+    let source = lock(&state)?.output_source(&item_id, &output_id)?;
+    let cropped = in_background(move || crop_preview(&source, crop)).await?;
+    lock(&state)?.set_output_crop(&item_id, &output_id, cropped)
+}
+
+/// Runs slow image work on a background thread so the window stays responsive.
+async fn in_background<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("The export stopped unexpectedly: {e}"))?
+}
+
+/// Size in pixels and in bytes that exporting one image would produce.
+#[tauri::command]
+async fn estimate_export(
+    state: State<'_, AppState>,
+    selection: OutputRef,
+    options: ExportOptions,
+) -> Result<ExportEstimate, String> {
+    let job = lock(&state)?
+        .export_jobs(std::slice::from_ref(&selection))?
+        .remove(0);
+    in_background(move || job.estimate(&options)).await
+}
+
+/// Crops, resizes and encodes the chosen images into `destination`.
+#[tauri::command]
+async fn export_images(
     state: State<'_, AppState>,
     selections: Vec<OutputRef>,
+    options: ExportOptions,
     destination: String,
 ) -> Result<usize, String> {
-    lock(&state)?.export(&selections, &PathBuf::from(destination))
+    let jobs = lock(&state)?.export_jobs(&selections)?;
+    in_background(move || run_export(&jobs, &options, &PathBuf::from(destination))).await
 }
 
 #[tauri::command]
@@ -332,7 +371,9 @@ fn main() {
             remove_item,
             set_output_status,
             remove_output,
-            export_outputs,
+            set_output_crop,
+            estimate_export,
+            export_images,
             check_style_prompt,
             import_style,
             update_style,

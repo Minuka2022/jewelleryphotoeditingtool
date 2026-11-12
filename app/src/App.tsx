@@ -26,8 +26,15 @@ function useGlobalInput() {
         action();
       };
 
+      // While cropping, Enter applies and Esc cancels; other shortcuts wait.
+      if (studio.cropDraft) {
+        if (key === 'enter') return run(studio.applyCrop);
+        if (key === 'escape') return run(studio.cancelCrop);
+        return;
+      }
+
       if (control && key === 'o') return run(studio.openPhotos);
-      if (control && event.shiftKey && key === 'e') return run(studio.exportApproved);
+      if (control && event.shiftKey && key === 'e') return run(studio.openExport);
       if (control && (key === 'g' || key === 'enter')) return run(studio.generate);
 
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes((event.target as HTMLElement).tagName);
@@ -44,6 +51,7 @@ function useGlobalInput() {
         0: () => studio.setView(FIT),
         h: () => studio.setTool('hand'),
         z: () => studio.setTool('zoom'),
+        c: () => studio.setTool('crop'),
       };
       if (actions[key]) run(actions[key]);
     };

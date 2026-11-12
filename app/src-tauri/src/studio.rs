@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use studio_core::cost::Pricing;
+use studio_core::export::{self, Crop, ExportOptions};
 use studio_core::gemini::{GenerateRequest, GeneratedImage};
 use studio_core::guardrails;
 use studio_core::library::{Library, Look, NewStyle, SceneTone, StyleTemplate};
@@ -150,11 +151,14 @@ pub struct ItemInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OutputInfo {
     #[serde(flatten)]
     pub record: OutputRecord,
-    /// Full path of the image file.
+    /// Full path of the image to show: the cropped copy when there is a crop.
     pub path: String,
+    /// Full path of the uncropped original, which the crop tool works on.
+    pub original_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -204,6 +208,79 @@ pub struct GenerateArgs {
 pub struct OutputRef {
     pub item_id: String,
     pub output_id: String,
+}
+
+/// One image to export, gathered while the workspace is locked so that the
+/// slow part (decoding, resizing, encoding) can run without holding it.
+#[derive(Debug, Clone)]
+pub struct ExportJob {
+    pub source: PathBuf,
+    pub crop: Option<Crop>,
+    /// File name without number or extension, e.g. "solitaire-01-black-velvet".
+    pub base_name: String,
+}
+
+/// What an export would produce, shown before exporting.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportEstimate {
+    pub width: u32,
+    pub height: u32,
+    /// Size of the image after cropping and before resizing.
+    pub source_width: u32,
+    pub source_height: u32,
+    pub bytes: usize,
+}
+
+impl ExportJob {
+    pub fn estimate(&self, options: &ExportOptions) -> Result<ExportEstimate, String> {
+        let rendered = export::render(&self.source, self.crop.as_ref(), options)?;
+        Ok(ExportEstimate {
+            width: rendered.width,
+            height: rendered.height,
+            source_width: rendered.source_width,
+            source_height: rendered.source_height,
+            bytes: rendered.bytes.len(),
+        })
+    }
+}
+
+/// Checks a crop and renders the copy shown on screen. Returns `None` when
+/// the crop keeps the whole image, which means "no crop".
+pub fn crop_preview(source: &Path, crop: Option<Crop>) -> Result<Option<(Crop, Vec<u8>)>, String> {
+    let Some(crop) = crop.filter(|crop| !crop.is_full()) else {
+        return Ok(None);
+    };
+    crop.validate()?;
+    // Near-lossless JPEG with full colour detail: fine for close inspection
+    // and quick to write. Exports always start again from the original.
+    let options = ExportOptions {
+        quality: 95,
+        ..ExportOptions::default()
+    };
+    let rendered = export::render(source, Some(&crop), &options)?;
+    Ok(Some((crop, rendered.bytes)))
+}
+
+/// Writes every job into `destination` with readable names, never replacing
+/// an existing file, and returns how many images were written.
+pub fn run_export(
+    jobs: &[ExportJob],
+    options: &ExportOptions,
+    destination: &Path,
+) -> Result<usize, String> {
+    if jobs.is_empty() {
+        return Err("There is nothing to export. Approve some images first.".into());
+    }
+    fs::create_dir_all(destination)
+        .map_err(|e| format!("Cannot use the folder {}: {e}", destination.display()))?;
+    for job in jobs {
+        let rendered = export::render(&job.source, job.crop.as_ref(), options)?;
+        let target = unused_path(destination, &job.base_name, options.format.extension());
+        fs::write(&target, rendered.bytes)
+            .map_err(|e| format!("Cannot write {}: {e}", target.display()))?;
+    }
+    Ok(jobs.len())
 }
 
 /// One image to generate.
@@ -359,8 +436,16 @@ impl Studio {
     }
 
     fn output_info(&self, item_id: &str, output: &OutputRecord) -> OutputInfo {
+        let original = self.store.output_path(item_id, &output.file);
+        let shown = output
+            .crop_preview
+            .as_ref()
+            .map(|preview| self.store.output_path(item_id, preview))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| original.clone());
         OutputInfo {
-            path: display(&self.store.output_path(item_id, &output.file)),
+            path: display(&shown),
+            original_path: display(&original),
             record: output.clone(),
         }
     }
@@ -561,40 +646,51 @@ impl Studio {
             image_size: plan.image_size.clone(),
             cost_usd: plan.per_image_usd,
             note: plan.note.clone(),
+            crop: None,
+            crop_preview: None,
         };
         self.store
             .add_output(&plan.item_id, record.clone(), &image.bytes)?;
         Ok(self.output_info(&plan.item_id, &record))
     }
 
-    /// Copies the chosen images into `destination` with readable names and
-    /// returns how many were copied. Existing files are never overwritten.
-    pub fn export(&self, selections: &[OutputRef], destination: &Path) -> Result<usize, String> {
-        if selections.is_empty() {
-            return Err("There is nothing to export. Approve some images first.".into());
-        }
-        fs::create_dir_all(destination)
-            .map_err(|e| format!("Cannot use the folder {}: {e}", destination.display()))?;
-        let mut copied = 0;
-        for selection in selections {
-            let item = self.store.item(&selection.item_id)?;
-            let output = item
-                .outputs
-                .iter()
-                .find(|output| output.id == selection.output_id)
-                .ok_or("One of the images no longer exists.")?;
-            let source = self.store.output_path(&item.id, &output.file);
-            let extension = Path::new(&output.file)
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .unwrap_or("png");
-            let base = format!("{}-{}", file_safe(&item.name), output.style_id);
-            let target = unused_path(destination, &base, extension);
-            fs::copy(&source, &target)
-                .map_err(|e| format!("Cannot copy to {}: {e}", target.display()))?;
-            copied += 1;
-        }
-        Ok(copied)
+    /// Saves, or with `None` removes, the crop of a generated image.
+    /// Where a generated image's original file is.
+    pub fn output_source(&self, item_id: &str, output_id: &str) -> Result<PathBuf, String> {
+        self.store.output_source(item_id, output_id)
+    }
+
+    /// Saves a crop together with its display copy from [`crop_preview`], or
+    /// with `None` removes the crop.
+    pub fn set_output_crop(
+        &mut self,
+        item_id: &str,
+        output_id: &str,
+        crop: Option<(Crop, Vec<u8>)>,
+    ) -> Result<ItemInfo, String> {
+        self.store.set_output_crop(item_id, output_id, crop)?;
+        self.item_info(item_id)
+    }
+
+    /// Looks up the files to export. Rendering them is left to [`run_export`]
+    /// so the workspace is not locked while it runs.
+    pub fn export_jobs(&self, selections: &[OutputRef]) -> Result<Vec<ExportJob>, String> {
+        selections
+            .iter()
+            .map(|selection| {
+                let item = self.store.item(&selection.item_id)?;
+                let output = item
+                    .outputs
+                    .iter()
+                    .find(|output| output.id == selection.output_id)
+                    .ok_or("One of the images no longer exists.")?;
+                Ok(ExportJob {
+                    source: self.store.output_path(&item.id, &output.file),
+                    crop: output.crop,
+                    base_name: format!("{}-{}", file_safe(&item.name), output.style_id),
+                })
+            })
+            .collect()
     }
 
     fn require_category(&self, id: &str) -> Result<(), String> {

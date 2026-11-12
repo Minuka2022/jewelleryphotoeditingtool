@@ -6,6 +6,7 @@ import { api, errorText } from '../api';
 import { useStudio } from '../store';
 import type { Look, PromptCheck, Tone } from '../types';
 import { Button, Field, Modal, cx, inputClass } from '../ui';
+import { ExportDialog } from './ExportDialog';
 
 function SettingsDialog() {
   const { settings, setSettings, setDialog } = useStudio();
@@ -289,7 +290,8 @@ function StyleDialog() {
 const shortcuts: [string, string][] = [
   ['Ctrl + O', 'Open photos'],
   ['Ctrl + G', 'Generate'],
-  ['Ctrl + Shift + E', 'Export approved images'],
+  ['Ctrl + Shift + E', 'Export As (format, quality, size)'],
+  ['C', 'Crop the generated image (Enter applies, Esc cancels)'],
   ['Left / Right', 'Previous / next image'],
   ['A', 'Approve the image (press again to undo)'],
   ['X', 'Reject the image (press again to undo)'],
@@ -379,6 +381,7 @@ export function Dialogs() {
       {dialog === 'settings' && <SettingsDialog />}
       {dialog === 'import-style' && <StyleDialog />}
       {dialog === 'shortcuts' && <ShortcutsDialog />}
+      {dialog === 'export' && <ExportDialog />}
       <ConfirmDialog />
       <Toasts />
     </>

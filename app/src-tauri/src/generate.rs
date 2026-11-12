@@ -109,18 +109,28 @@ where
 mod tests {
     use super::*;
     use crate::studio::tests::studio_with_ring;
-    use crate::studio::{GenerateArgs, OutputRef};
+    use crate::studio::{crop_preview, run_export, GenerateArgs, OutputRef};
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use studio_core::export::{Crop, ExportOptions};
     use studio_core::gemini::{
         GenerateError, GenerateOutput, GenerateRequest, GeneratedImage, Usage,
     };
 
-    /// Succeeds with a fake PNG, except for every third request.
+    /// Succeeds with a 400 x 300 PNG, except for every third request.
     #[derive(Default)]
     struct FakeGenerator {
         calls: AtomicUsize,
+    }
+
+    fn fake_png() -> Vec<u8> {
+        let image = image::RgbImage::from_fn(400, 300, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 120])
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        bytes.into_inner()
     }
 
     impl ImageGenerator for FakeGenerator {
@@ -138,7 +148,7 @@ mod tests {
             Ok(GenerateOutput {
                 image: GeneratedImage {
                     mime_type: "image/png".into(),
-                    bytes: b"\x89PNG fake".to_vec(),
+                    bytes: fake_png(),
                 },
                 notes: None,
                 usage: Usage::default(),
@@ -194,21 +204,94 @@ mod tests {
         assert_eq!(item.outputs.len(), 3);
         assert!(!Path::new(&deleted.path).exists());
 
+        // Crop the right half; the crop is kept with the image.
+        let crop = Crop {
+            x: 0.5,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        };
+        let source = studio.output_source(&item_id, &approved).unwrap();
+        let cropped = crop_preview(&source, Some(crop)).unwrap();
+        let item = studio
+            .set_output_crop(&item_id, &approved, cropped)
+            .unwrap();
+        let shown = &item.outputs[0];
+        assert_eq!(shown.record.crop, Some(crop));
+        // The screen shows a cropped copy; the original file is untouched.
+        assert_ne!(shown.path, shown.original_path);
+        assert_eq!(image::open(&shown.path).unwrap().width(), 200);
+        assert_eq!(image::open(&shown.original_path).unwrap().width(), 400);
+        let bad = Crop { width: 0.9, ..crop };
+        assert!(crop_preview(&source, Some(bad)).is_err());
+        let whole = Crop {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert!(crop_preview(&source, Some(whole)).unwrap().is_none());
+
+        // Cropping again replaces the display copy instead of adding another.
+        let first_copy = shown.path.clone();
+        let tighter = Crop {
+            height: 0.5,
+            ..crop
+        };
+        studio
+            .set_output_crop(
+                &item_id,
+                &approved,
+                crop_preview(&source, Some(tighter)).unwrap(),
+            )
+            .unwrap();
+        assert!(!Path::new(&first_copy).exists());
+        let item = studio
+            .set_output_crop(
+                &item_id,
+                &approved,
+                crop_preview(&source, Some(crop)).unwrap(),
+            )
+            .unwrap();
+        let preview_path = item.outputs[0].path.clone();
+
+        // Export it twice as a 100 px wide JPEG: the crop and the size apply,
+        // and the second file gets the next number instead of replacing the first.
         let export_dir = dir.join("export");
         let selection = [OutputRef {
             item_id: item_id.clone(),
-            output_id: approved,
+            output_id: approved.clone(),
         }];
-        assert_eq!(studio.export(&selection, &export_dir).unwrap(), 1);
-        assert_eq!(studio.export(&selection, &export_dir).unwrap(), 1);
+        let jobs = studio.export_jobs(&selection).unwrap();
+        let options = ExportOptions {
+            width: Some(100),
+            ..ExportOptions::default()
+        };
+        let estimate = jobs[0].estimate(&options).unwrap();
+        assert_eq!((estimate.source_width, estimate.source_height), (200, 300));
+        assert_eq!((estimate.width, estimate.height), (100, 150));
+        assert!(estimate.bytes > 0);
+
+        assert_eq!(run_export(&jobs, &options, &export_dir).unwrap(), 1);
+        assert_eq!(run_export(&jobs, &options, &export_dir).unwrap(), 1);
         let style = &item.outputs[0].record.style_id;
+        let first = export_dir.join(format!("Gold-Ring-01-{style}-1.jpg"));
+        let exported = image::open(&first).unwrap();
+        assert_eq!((exported.width(), exported.height()), (100, 150));
         assert!(export_dir
-            .join(format!("Gold-Ring-01-{style}-1.png"))
+            .join(format!("Gold-Ring-01-{style}-2.jpg"))
             .is_file());
-        assert!(export_dir
-            .join(format!("Gold-Ring-01-{style}-2.png"))
-            .is_file());
-        assert!(studio.export(&[], &export_dir).is_err());
+        assert!(run_export(&[], &options, &export_dir).is_err());
+
+        // Removing the crop brings back the whole image and its copy is deleted.
+        let item = studio.set_output_crop(&item_id, &approved, None).unwrap();
+        assert_eq!(item.outputs[0].record.crop, None);
+        assert_eq!(item.outputs[0].path, item.outputs[0].original_path);
+        assert!(!Path::new(&preview_path).exists());
+        let full = studio.export_jobs(&selection).unwrap()[0]
+            .estimate(&ExportOptions::default())
+            .unwrap();
+        assert_eq!((full.width, full.height), (400, 300));
 
         studio.remove_item(&item_id).unwrap();
         assert!(studio.items_info().is_empty());

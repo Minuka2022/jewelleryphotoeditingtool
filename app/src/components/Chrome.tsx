@@ -2,7 +2,7 @@
 // photo tabs and status bar.
 
 import { useEffect, useState } from 'react';
-import { FIT, formatUsd, useStudio } from '../store';
+import { CROP_RATIOS, FIT, FULL_CROP, centredCrop, formatUsd, useStudio } from '../store';
 import type { CompareMode, Tool } from '../store';
 import { Button, Icon, Select, Spinner, cx, inputClass } from '../ui';
 import type { IconName } from '../ui';
@@ -30,7 +30,7 @@ export function MenuBar() {
     File: [
       { label: 'Open Photos...', shortcut: 'Ctrl+O', run: studio.openPhotos },
       { label: 'Import Style...', run: () => studio.openStyleDialog() },
-      { label: 'Export Approved...', shortcut: 'Ctrl+Shift+E', run: studio.exportApproved },
+      { label: 'Export As...', shortcut: 'Ctrl+Shift+E', run: studio.openExport },
       'divider',
       { label: 'Settings...', run: () => studio.setDialog('settings') },
     ],
@@ -40,6 +40,16 @@ export function MenuBar() {
       { label: 'Approve', shortcut: 'A', disabled: !hasOutput, run: () => studio.setStatus('approved') },
       { label: 'Reject', shortcut: 'X', disabled: !hasOutput, run: () => studio.setStatus('rejected') },
       { label: 'Delete Image', shortcut: 'Del', disabled: !hasOutput, run: studio.deleteViewedOutput },
+      'divider',
+      { label: 'Crop', shortcut: 'C', disabled: !hasOutput, run: studio.startCrop },
+      {
+        label: 'Remove Crop',
+        disabled: !studio.viewedOutput?.crop,
+        run: () => {
+          const { activeItem, viewedOutput } = studio;
+          if (activeItem && viewedOutput) void studio.removeCrop(activeItem.id, viewedOutput.id);
+        },
+      },
     ],
     View: [
       { label: 'Generated Image Only', shortcut: '1', run: () => studio.setCompare('single') },
@@ -97,9 +107,61 @@ export function MenuBar() {
 
 const SHAPES = ['1:1', '4:5', '3:4', '4:3', '3:2', '16:9'];
 
+/** Replaces the options bar while the crop tool is in use, as in Photoshop. */
+function CropOptionsBar() {
+  const { cropDraft, setCropDraft, applyCrop, cancelCrop } = useStudio();
+  if (!cropDraft) return null;
+  const { crop, natural } = cropDraft;
+
+  const chooseRatio = (ratioId: string) => {
+    const choice = CROP_RATIOS.find((option) => option.id === ratioId)?.ratio ?? null;
+    setCropDraft((draft) => {
+      if (!draft) return draft;
+      if (choice === null || !draft.natural) return { ...draft, ratioId };
+      const pixelRatio = choice === 'original' ? draft.natural.width / draft.natural.height : choice;
+      return { ...draft, ratioId, crop: centredCrop(pixelRatio, draft.natural) };
+    });
+  };
+
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
+      <span className="flex items-center gap-1.5 font-semibold">
+        <Icon name="crop" size={14} /> Crop
+      </span>
+      <span className="text-dim">Shape</span>
+      <Select aria-label="Crop shape" value={cropDraft.ratioId} onChange={(event) => chooseRatio(event.target.value)}>
+        {CROP_RATIOS.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+      <span className="text-dim tabular-nums" data-crop-size>
+        {natural
+          ? `${Math.round(crop.width * natural.width)} x ${Math.round(crop.height * natural.height)} px`
+          : 'Loading image...'}
+      </span>
+      <Button
+        className="h-6"
+        onClick={() => setCropDraft((draft) => (draft ? { ...draft, crop: FULL_CROP, ratioId: 'free' } : draft))}
+      >
+        Reset
+      </Button>
+      <span className="ml-auto" />
+      <Button className="h-6" onClick={cancelCrop}>
+        Cancel (Esc)
+      </Button>
+      <Button variant="primary" className="h-6" onClick={applyCrop}>
+        Apply crop (Enter)
+      </Button>
+    </div>
+  );
+}
+
 export function OptionsBar() {
   const studio = useStudio();
   const { library, settings, activeItem, usableStyles, plannedImages, plannedCost, isGenerating } = studio;
+  if (studio.cropDraft) return <CropOptionsBar />;
   if (!library || !settings) return <div className="h-10 shrink-0 border-b border-line bg-panel" />;
 
   const model = library.models.find((candidate) => candidate.id === settings.model);
@@ -279,6 +341,13 @@ export function ToolStrip() {
       {tools.map(([id, icon, title]) => (
         <ToolButton key={id} icon={icon} title={title} active={tool === id} onClick={() => studio.setTool(id)} />
       ))}
+      <ToolButton
+        icon="crop"
+        title="Crop the generated image (C)"
+        active={tool === 'crop'}
+        disabled={noOutput}
+        onClick={() => studio.setTool('crop')}
+      />
       {rule}
       {modes.map(([id, icon, title]) => (
         <ToolButton key={id} icon={icon} title={title} active={compare === id} onClick={() => studio.setCompare(id)} />
@@ -302,6 +371,8 @@ export function ToolStrip() {
         onClick={() => studio.setStatus('rejected')}
       />
       <ToolButton icon="trash" title="Delete this image (Del)" disabled={noOutput} onClick={studio.deleteViewedOutput} />
+      {rule}
+      <ToolButton icon="export" title="Export As... (Ctrl+Shift+E)" onClick={studio.openExport} />
     </div>
   );
 }
@@ -363,7 +434,7 @@ export function StatusBar() {
           <span className="w-12 tabular-nums">{zoomPercent}%</span>
           <span>
             {viewedOutput
-              ? `${viewedOutput.styleName} v${viewedOutput.styleVersion}, ${viewedOutput.model}, ${viewedOutput.imageSize}`
+              ? `${viewedOutput.styleName} v${viewedOutput.styleVersion}, ${viewedOutput.model}, ${viewedOutput.imageSize}${viewedOutput.crop ? ', cropped' : ''}`
               : `Reference, ${activeItem.width} x ${activeItem.height} px`}
           </span>
         </>

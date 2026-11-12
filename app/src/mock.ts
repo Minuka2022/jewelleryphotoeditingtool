@@ -4,7 +4,7 @@
 // spending money on real generations.
 
 import type { Api } from './api';
-import type { ItemInfo, LibraryInfo, OutputInfo, Progress, SettingsInfo, StyleInfo } from './types';
+import type { Crop, ItemInfo, LibraryInfo, OutputInfo, Progress, SettingsInfo, StyleInfo } from './types';
 
 const picture = (background: string, label: string) =>
   'data:image/svg+xml;utf8,' +
@@ -87,8 +87,22 @@ const output = (itemName: string, styleId: string, runId: string, number: number
     imageSize: settings.imageSize,
     costUsd: 0.0504,
     note: null,
-    path: picture(backgrounds[styleId] ?? '#6d5a7a', `${itemName} / ${info.name} / option ${number}`),
+    ...(() => {
+      const path = picture(backgrounds[styleId] ?? '#6d5a7a', `${itemName} / ${info.name} / option ${number}`);
+      return { path, originalPath: path };
+    })(),
   };
+};
+
+/** The placeholder picture cut down to the crop, like the real cropped copy. */
+const croppedPicture = (original: string, crop: Crop) => {
+  const svg = decodeURIComponent(original.slice('data:image/svg+xml;utf8,'.length));
+  const [x, y, w, h] = [crop.x * 1200, crop.y * 900, crop.width * 1200, crop.height * 900].map(Math.round);
+  const cut = svg.replace(
+    'width="1200" height="900" viewBox="0 0 1200 900"',
+    `width="${w}" height="${h}" viewBox="${x} ${y} ${w} ${h}"`,
+  );
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(cut);
 };
 
 const item = (name: string, category: string): ItemInfo => ({
@@ -147,7 +161,29 @@ export const mockApi: Api = {
     found.outputs = found.outputs.filter((o) => o.id !== outputId);
     return copy(found);
   },
-  exportOutputs: async (selections) => selections.length,
+  setOutputCrop: async (itemId, outputId, crop) => {
+    await wait(120);
+    const found = find(itemId);
+    found.outputs = found.outputs.map((o) =>
+      o.id === outputId ? { ...o, crop, path: crop ? croppedPicture(o.originalPath, crop) : o.originalPath } : o,
+    );
+    return copy(found);
+  },
+  estimateExport: async (selection, options) => {
+    await wait(150);
+    const output = find(selection.itemId).outputs.find((o) => o.id === selection.outputId);
+    const crop = output?.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+    const sourceWidth = Math.round(1200 * crop.width);
+    const sourceHeight = Math.round(900 * crop.height);
+    const width = options.width ?? sourceWidth;
+    const height = Math.max(1, Math.round((width * sourceHeight) / sourceWidth));
+    const perPixel = options.format === 'jpeg' ? 0.15 + (options.quality / 100) ** 3 * 1.6 : 2.2;
+    return { width, height, sourceWidth, sourceHeight, bytes: Math.round(width * height * perPixel) };
+  },
+  exportImages: async (selections) => {
+    await wait(400);
+    return selections.length;
+  },
   checkStylePrompt: async (prompt) => ({
     warnings: /\b(hand|worn|side view|rotate)\b/i.test(prompt)
       ? ['"hand" shows the item worn or on a body']

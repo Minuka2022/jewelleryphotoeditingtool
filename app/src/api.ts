@@ -8,6 +8,9 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { mockApi } from './mock';
 import type {
   AddItemsResult,
+  Crop,
+  ExportEstimate,
+  ExportOptions,
   GenerateArgs,
   ImportStyle,
   ImportedStyle,
@@ -35,7 +38,11 @@ export interface Api {
   removeItem(id: string): Promise<void>;
   setOutputStatus(itemId: string, outputId: string, status: OutputStatus): Promise<ItemInfo>;
   removeOutput(itemId: string, outputId: string): Promise<ItemInfo>;
-  exportOutputs(selections: OutputRef[], destination: string): Promise<number>;
+  /** null removes the crop. */
+  setOutputCrop(itemId: string, outputId: string, crop: Crop | null): Promise<ItemInfo>;
+  estimateExport(selection: OutputRef, options: ExportOptions): Promise<ExportEstimate>;
+  /** Resolves to the number of images written. */
+  exportImages(selections: OutputRef[], options: ExportOptions, destination: string): Promise<number>;
   checkStylePrompt(prompt: string): Promise<PromptCheck>;
   importStyle(style: ImportStyle): Promise<ImportedStyle>;
   /** A null `imagePath` keeps the style's current picture. */
@@ -72,7 +79,10 @@ const tauriApi: Api = {
   setOutputStatus: (itemId, outputId, status) =>
     invoke('set_output_status', { itemId, outputId, status }),
   removeOutput: (itemId, outputId) => invoke('remove_output', { itemId, outputId }),
-  exportOutputs: (selections, destination) => invoke('export_outputs', { selections, destination }),
+  setOutputCrop: (itemId, outputId, crop) => invoke('set_output_crop', { itemId, outputId, crop }),
+  estimateExport: (selection, options) => invoke('estimate_export', { selection, options }),
+  exportImages: (selections, options, destination) =>
+    invoke('export_images', { selections, options, destination }),
   checkStylePrompt: (prompt) => invoke('check_style_prompt', { prompt }),
   importStyle: (style) => invoke('import_style', { style }),
   updateStyle: (id, style) => invoke('update_style', { id, style }),

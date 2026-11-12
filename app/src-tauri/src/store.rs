@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use studio_core::export::Crop;
 use studio_core::reference::{prepare_reference, PrepareOptions};
 
 const REFERENCE_FILE: &str = "reference.jpg";
@@ -50,6 +51,13 @@ pub struct OutputRecord {
     pub image_size: String,
     pub cost_usd: Option<f64>,
     pub note: Option<String>,
+    /// The part of the image to keep. The file itself is never changed, so a
+    /// crop can always be adjusted or removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
+    /// File name of a cropped copy kept only for display, next to `file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_preview: Option<String>,
 }
 
 pub struct Store {
@@ -177,6 +185,51 @@ impl Store {
         self.save(&self.items[index])
     }
 
+    /// Where a generated image's original file is.
+    pub fn output_source(&self, item_id: &str, output_id: &str) -> Result<PathBuf, String> {
+        let item = self.item(item_id)?;
+        let output = item
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .ok_or("That image no longer exists.")?;
+        Ok(self.output_path(item_id, &output.file))
+    }
+
+    /// Records a crop and its display copy (JPEG bytes), replacing any
+    /// earlier one. `None` removes the crop and its copy.
+    pub fn set_output_crop(
+        &mut self,
+        item_id: &str,
+        output_id: &str,
+        crop: Option<(Crop, Vec<u8>)>,
+    ) -> Result<(), String> {
+        let index = self.index(item_id)?;
+        let position = self.items[index]
+            .outputs
+            .iter()
+            .position(|output| output.id == output_id)
+            .ok_or("That image no longer exists.")?;
+
+        // A new file name each time, so the window never shows a stale copy.
+        let (crop, preview) = match crop {
+            Some((crop, bytes)) => {
+                let name = format!("{output_id}-crop-{}.jpg", new_id(""));
+                let path = self.output_path(item_id, &name);
+                fs::write(&path, bytes).map_err(|e| cannot("write", &path, e))?;
+                (Some(crop), Some(name))
+            }
+            None => (None, None),
+        };
+        let output = &mut self.items[index].outputs[position];
+        let old_preview = std::mem::replace(&mut output.crop_preview, preview);
+        output.crop = crop;
+        if let Some(old) = old_preview {
+            let _ = fs::remove_file(self.output_path(item_id, &old));
+        }
+        self.save(&self.items[index])
+    }
+
     pub fn remove_output(&mut self, item_id: &str, output_id: &str) -> Result<(), String> {
         let index = self.index(item_id)?;
         let outputs = &self.items[index].outputs;
@@ -184,9 +237,11 @@ impl Store {
             .iter()
             .position(|output| output.id == output_id)
             .ok_or("That image no longer exists.")?;
-        let path = self.output_path(item_id, &outputs[position].file);
-        // The record is what matters; a file that is already gone is fine.
-        let _ = fs::remove_file(path);
+        // The record is what matters; files that are already gone are fine.
+        let output = &outputs[position];
+        for file in std::iter::once(&output.file).chain(&output.crop_preview) {
+            let _ = fs::remove_file(self.output_path(item_id, file));
+        }
         self.items[index].outputs.remove(position);
         self.save(&self.items[index])
     }

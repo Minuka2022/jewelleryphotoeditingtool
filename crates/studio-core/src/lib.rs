@@ -3,6 +3,7 @@
 //! reference-photo preparation, cost estimates and the Gemini client.
 
 pub mod cost;
+pub mod export;
 pub mod gemini;
 pub mod guardrails;
 pub mod library;

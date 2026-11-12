@@ -116,6 +116,8 @@ const icons = {
   cross: 'M6 6l12 12M18 6L6 18',
   trash: 'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13',
   edit: 'M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4',
+  crop: 'M6 2v14a2 2 0 002 2h14M2 6h14a2 2 0 012 2v14',
+  export: 'M12 3v12M7 10l5 5 5-5M5 21h14',
   plus: 'M12 5v14M5 12h14',
   folder: 'M3 7a1 1 0 011-1h5l2 2h8a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V7z',
 } as const;
