@@ -26,11 +26,20 @@ if (-not $repo) { throw 'Could not read the releases repository from tauri.conf.
 $cargo = Get-Content "$root\Cargo.toml" -Raw
 $updated = ([regex]'(?m)^version = ".+"').Replace($cargo, "version = `"$Version`"", 1)
 if ($updated -ne $cargo) {
-    [System.IO.File]::WriteAllText("$root\Cargo.toml", $updated)
-    $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-    cargo metadata --format-version 1 --offline | Out-Null   # refreshes Cargo.lock
-    if ($LASTEXITCODE -ne 0) { throw 'Could not update Cargo.lock.' }
-    npm --prefix "$root\app" version $Version --no-git-tag-version --allow-same-version | Out-Null
+    try {
+        [System.IO.File]::WriteAllText("$root\Cargo.toml", $updated)
+        $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+        # Rewrites only this project's own entries in Cargo.lock.
+        cargo update --workspace --quiet
+        if ($LASTEXITCODE -ne 0) { throw 'Could not update Cargo.lock.' }
+        npm --prefix "$root\app" version $Version --no-git-tag-version --allow-same-version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not update package.json.' }
+    }
+    catch {
+        # Leave the project as it was, so the release can simply be run again.
+        git checkout --quiet -- Cargo.toml Cargo.lock app/package.json app/package-lock.json
+        throw
+    }
     git commit --all --quiet --message "Release v$Version"
 }
 
