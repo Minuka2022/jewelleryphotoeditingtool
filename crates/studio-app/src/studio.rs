@@ -262,6 +262,29 @@ pub fn crop_preview(source: &Path, crop: Option<Crop>) -> Result<Option<(Crop, V
     Ok(Some((crop, rendered.bytes)))
 }
 
+/// Renders every job in memory with a readable file name, unique within the
+/// list, for handing to a browser as a download.
+pub fn render_export(
+    jobs: &[ExportJob],
+    options: &ExportOptions,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if jobs.is_empty() {
+        return Err("There is nothing to export. Approve some images first.".into());
+    }
+    let extension = options.format.extension();
+    let mut taken = BTreeSet::new();
+    jobs.iter()
+        .map(|job| {
+            let rendered = export::render(&job.source, job.crop.as_ref(), options)?;
+            let name = (1..)
+                .map(|number| format!("{}-{number}.{extension}", job.base_name))
+                .find(|name| taken.insert(name.clone()))
+                .expect("an unused name always exists");
+            Ok((name, rendered.bytes))
+        })
+        .collect()
+}
+
 /// Writes every job into `destination` with readable names, never replacing
 /// an existing file, and returns how many images were written.
 pub fn run_export(

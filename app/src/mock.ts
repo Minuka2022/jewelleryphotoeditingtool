@@ -182,7 +182,7 @@ export const mockApi: Api = {
   },
   exportImages: async (selections) => {
     await wait(400);
-    return selections.length;
+    return { count: selections.length, where: 'C:\\Exports' };
   },
   checkStylePrompt: async (prompt) => ({
     warnings: /\b(hand|worn|side view|rotate)\b/i.test(prompt)
@@ -275,6 +275,5 @@ export const mockApi: Api = {
   onFilesDropped: async () => () => {},
   pickPhotos: async () => [`sample-${nextId}.jpg`],
   pickImage: async () => 'example-look.jpg',
-  pickFolder: async () => 'C:\\Exports',
   fileSrc: (path) => path,
 };

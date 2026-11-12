@@ -61,9 +61,10 @@ function useGlobalInput() {
 
     window.addEventListener('keydown', onKey);
     window.addEventListener('contextmenu', onContextMenu);
-    const stopDrops = api.onFilesDropped((paths) => {
-      void latest.current.addPhotos(paths.filter((path) => PHOTO_FILE.test(path)));
-    });
+    const stopDrops = api.onFilesDropped(
+      (paths) => void latest.current.addPhotos(paths.filter((path) => PHOTO_FILE.test(path))),
+      (message) => latest.current.notify('error', message),
+    );
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('contextmenu', onContextMenu);

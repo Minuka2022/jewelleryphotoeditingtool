@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/studio-core", "crates/poc-cli", "app/src-tauri"]
+members = ["crates/studio-core", "crates/studio-app", "crates/poc-cli", "crates/web", "app/src-tauri"]
 
 [workspace.package]
 version = "0.4.0"
@@ -9,6 +9,7 @@ publish = false
 
 [workspace.dependencies]
 studio-core = { path = "crates/studio-core" }
+studio-app = { path = "crates/studio-app" }
 
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

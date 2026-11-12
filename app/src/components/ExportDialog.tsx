@@ -199,11 +199,10 @@ export function ExportDialog() {
   const run = async () => {
     setExporting(true);
     try {
-      const destination = await api.pickFolder();
-      if (!destination) return;
-      const written = await api.exportImages(selections, options, destination);
+      const result = await api.exportImages(selections, options);
+      if (!result) return;
       saveOptions(options);
-      notify('info', `Exported ${written} image${written === 1 ? '' : 's'} to ${destination}`);
+      notify('info', `Exported ${result.count} image${result.count === 1 ? '' : 's'} to ${result.where}`);
       close();
     } catch (error) {
       setProblem(errorText(error));

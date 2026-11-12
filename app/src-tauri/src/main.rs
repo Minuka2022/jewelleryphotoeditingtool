@@ -1,128 +1,58 @@
 // Hide the console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod generate;
-mod secrets;
-mod store;
-mod studio;
+//! The desktop app: a window around the shared logic in `studio_app`.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Mutex;
 
 use serde::Serialize;
+use studio_app::secrets;
+use studio_app::service::{self, lock, settings_info, ImportedStyle, SettingsInfo, Shared};
+use studio_app::store::OutputStatus;
+use studio_app::studio::{
+    AddItemsResult, ExportEstimate, GenerateArgs, ImportStyle, ItemInfo, LibraryInfo, OutputRef,
+    PromptCheck, Settings, Studio,
+};
 use studio_core::export::{Crop, ExportOptions};
-use studio_core::gemini::GeminiClient;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
-use crate::store::OutputStatus;
-use crate::studio::{
-    crop_preview, run_export, AddItemsResult, ExportEstimate, GenerateArgs, ImportStyle, ItemInfo,
-    LibraryInfo, OutputRef, PromptCheck, Settings, Studio,
-};
-
-type AppState = Mutex<Studio>;
-
-const NO_KEY: &str = "Add your Gemini API key first: File > Settings.";
-const BILLING_HELP: &str = "Google refused the request because this API key's project is on \
-    the free tier, which does not include image models. Open https://ai.dev/rate-limit with the \
-    Google account that owns the key, set up billing, then try again. Nothing was charged.";
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingsInfo {
-    #[serde(flatten)]
-    settings: Settings,
-    has_api_key: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ImportedStyle {
-    style_id: String,
-    library: LibraryInfo,
-}
-
-fn lock(state: &AppState) -> Result<MutexGuard<'_, Studio>, String> {
-    state
-        .lock()
-        .map_err(|_| "The app's data is unavailable. Please restart Jewelry Studio.".to_owned())
-}
-
-fn settings_info(studio: &Studio) -> SettingsInfo {
-    SettingsInfo {
-        settings: studio.settings().clone(),
-        has_api_key: secrets::load().is_some(),
-    }
-}
-
-/// `GEMINI_BASE_URL` redirects requests to a local test server or a proxy.
-fn new_client(api_key: String) -> Result<GeminiClient, String> {
-    let client = GeminiClient::new(api_key).map_err(|e| e.to_string())?;
-    Ok(match std::env::var("GEMINI_BASE_URL") {
-        Ok(base_url) if !base_url.trim().is_empty() => client.with_base_url(base_url.trim()),
-        _ => client,
-    })
-}
-
-/// Google words a missing billing setup as a rate limit of zero.
-fn explain(error: String) -> String {
-    if error.contains("Free Tier") {
-        BILLING_HELP.to_owned()
-    } else {
-        error
-    }
-}
-
 #[tauri::command]
-fn get_library(state: State<'_, AppState>) -> Result<LibraryInfo, String> {
+fn get_library(state: State<'_, Shared>) -> Result<LibraryInfo, String> {
     Ok(lock(&state)?.library_info())
 }
 
 #[tauri::command]
-fn get_settings(state: State<'_, AppState>) -> Result<SettingsInfo, String> {
+fn get_settings(state: State<'_, Shared>) -> Result<SettingsInfo, String> {
     Ok(settings_info(&*lock(&state)?))
 }
 
 #[tauri::command]
-fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<SettingsInfo, String> {
+fn save_settings(state: State<'_, Shared>, settings: Settings) -> Result<SettingsInfo, String> {
     let mut studio = lock(&state)?;
     studio.save_settings(settings)?;
     Ok(settings_info(&studio))
 }
 
 #[tauri::command]
-fn set_api_key(state: State<'_, AppState>, key: String) -> Result<SettingsInfo, String> {
-    secrets::save(&key)?;
-    Ok(settings_info(&*lock(&state)?))
-}
-
-/// Asks Google which models the saved key can use. Free of charge.
-#[tauri::command]
-async fn check_api_key(state: State<'_, AppState>) -> Result<String, String> {
-    let api_key = secrets::load().ok_or(NO_KEY)?;
-    let model = lock(&state)?.settings().model.clone();
-    let models = new_client(api_key)?
-        .list_models()
-        .await
-        .map_err(|e| explain(e.to_string()))?;
-    if models.contains(&model) {
-        Ok(format!("The key works and {model} is available."))
-    } else {
-        Err(format!(
-            "The key works, but it cannot use {model}. Choose another model in Settings."
-        ))
-    }
+fn set_api_key(state: State<'_, Shared>, key: String) -> Result<SettingsInfo, String> {
+    service::set_api_key(&state, &key)
 }
 
 #[tauri::command]
-fn list_items(state: State<'_, AppState>) -> Result<Vec<ItemInfo>, String> {
+async fn check_api_key(state: State<'_, Shared>) -> Result<String, String> {
+    service::check_api_key(&state).await
+}
+
+#[tauri::command]
+fn list_items(state: State<'_, Shared>) -> Result<Vec<ItemInfo>, String> {
     Ok(lock(&state)?.items_info())
 }
 
 #[tauri::command]
 fn add_items(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     paths: Vec<String>,
     category: String,
 ) -> Result<AddItemsResult, String> {
@@ -132,7 +62,7 @@ fn add_items(
 
 #[tauri::command]
 fn update_item(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     id: String,
     name: Option<String>,
     category: Option<String>,
@@ -141,13 +71,13 @@ fn update_item(
 }
 
 #[tauri::command]
-fn remove_item(state: State<'_, AppState>, id: String) -> Result<(), String> {
+fn remove_item(state: State<'_, Shared>, id: String) -> Result<(), String> {
     lock(&state)?.remove_item(&id)
 }
 
 #[tauri::command]
 fn set_output_status(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     item_id: String,
     output_id: String,
     status: OutputStatus,
@@ -157,122 +87,78 @@ fn set_output_status(
 
 #[tauri::command]
 fn remove_output(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     item_id: String,
     output_id: String,
 ) -> Result<ItemInfo, String> {
     lock(&state)?.remove_output(&item_id, &output_id)
 }
 
-/// Saves a crop (or removes it with `None`) and makes the copy shown on screen.
 #[tauri::command]
 async fn set_output_crop(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     item_id: String,
     output_id: String,
     crop: Option<Crop>,
 ) -> Result<ItemInfo, String> {
-    let source = lock(&state)?.output_source(&item_id, &output_id)?;
-    let cropped = in_background(move || crop_preview(&source, crop)).await?;
-    lock(&state)?.set_output_crop(&item_id, &output_id, cropped)
+    service::set_output_crop(&state, &item_id, &output_id, crop).await
 }
 
-/// Runs slow image work on a background thread so the window stays responsive.
-async fn in_background<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|e| format!("The export stopped unexpectedly: {e}"))?
-}
-
-/// Size in pixels and in bytes that exporting one image would produce.
 #[tauri::command]
 async fn estimate_export(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     selection: OutputRef,
     options: ExportOptions,
 ) -> Result<ExportEstimate, String> {
-    let job = lock(&state)?
-        .export_jobs(std::slice::from_ref(&selection))?
-        .remove(0);
-    in_background(move || job.estimate(&options)).await
+    service::estimate_export(&state, selection, options).await
 }
 
-/// Crops, resizes and encodes the chosen images into `destination`.
 #[tauri::command]
 async fn export_images(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     selections: Vec<OutputRef>,
     options: ExportOptions,
     destination: String,
 ) -> Result<usize, String> {
-    let jobs = lock(&state)?.export_jobs(&selections)?;
-    in_background(move || run_export(&jobs, &options, &PathBuf::from(destination))).await
+    service::export_to_folder(&state, selections, options, PathBuf::from(destination)).await
 }
 
 #[tauri::command]
-fn check_style_prompt(state: State<'_, AppState>, prompt: String) -> Result<PromptCheck, String> {
+fn check_style_prompt(state: State<'_, Shared>, prompt: String) -> Result<PromptCheck, String> {
     Ok(lock(&state)?.check_style_prompt(&prompt))
 }
 
 #[tauri::command]
-fn import_style(state: State<'_, AppState>, style: ImportStyle) -> Result<ImportedStyle, String> {
-    let mut studio = lock(&state)?;
-    let imported = studio.import_style(style)?;
-    Ok(ImportedStyle {
-        style_id: imported.id,
-        library: studio.library_info(),
-    })
+fn import_style(state: State<'_, Shared>, style: ImportStyle) -> Result<ImportedStyle, String> {
+    service::import_style(&state, style)
 }
 
 #[tauri::command]
 fn update_style(
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     id: String,
     style: ImportStyle,
 ) -> Result<ImportedStyle, String> {
-    let mut studio = lock(&state)?;
-    let updated = studio.update_style(&id, style)?;
-    Ok(ImportedStyle {
-        style_id: updated.id,
-        library: studio.library_info(),
-    })
+    service::update_style(&state, &id, style)
 }
 
 #[tauri::command]
-fn remove_style(state: State<'_, AppState>, id: String) -> Result<LibraryInfo, String> {
-    let mut studio = lock(&state)?;
-    studio.remove_style(&id)?;
-    Ok(studio.library_info())
+fn remove_style(state: State<'_, Shared>, id: String) -> Result<LibraryInfo, String> {
+    service::remove_style(&state, &id)
 }
 
-/// Generates every style and option for one photo. Progress arrives in the
-/// window as `generation-progress` events; the finished photo is returned.
+/// Progress arrives in the window as `generation-progress` events.
 #[tauri::command]
 async fn generate(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Shared>,
     args: GenerateArgs,
 ) -> Result<ItemInfo, String> {
-    let api_key = secrets::load().ok_or(NO_KEY)?;
-    let plan = lock(&state)?.plan_generation(&args)?;
-    let item_id = plan.item_id.clone();
-    let client = Arc::new(new_client(api_key)?);
-
-    let summary = generate::run(client, state.inner(), plan, |progress| {
+    service::generate(&state, args, |progress| {
         // A closed window simply stops listening.
         let _ = app.emit("generation-progress", progress);
     })
-    .await;
-
-    if summary.saved == 0 {
-        let error = summary
-            .first_error
-            .unwrap_or_else(|| "No image could be generated.".to_owned());
-        return Err(explain(error));
-    }
-    lock(&state)?.item_info(&item_id)
+    .await
 }
 
 #[derive(Serialize)]

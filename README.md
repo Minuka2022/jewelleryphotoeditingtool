@@ -16,6 +16,25 @@ each result with the original, approve the good ones and export them.
    (get one at <https://aistudio.google.com>). Image models have no free
    tier, so the key's Google project needs billing turned on.
 
+## Web version
+
+The same interface, running in your browser and served by a small program on
+your own computer (only this computer can reach it).
+
+- Build it and copy it into a folder:
+  `powershell -ExecutionPolicy Bypass -File scripts\build-web.ps1 -Destination "D:\some\folder"`
+  (the default folder is `D:\idearigs\jewellery tol new webbased`).
+- Double-click `Jewelry Studio.exe` there. A window shows the address and the
+  browser opens it; close the window to stop.
+- Work is kept in the `data` folder next to the program. On the very first
+  start, the desktop app's styles are copied in.
+- Photos are uploaded to the program instead of being read from a path, and
+  exports arrive as browser downloads (several images as one ZIP).
+- To update: close it, run the build script again, start it again.
+
+Both versions use the same code (`crates/studio-app`), so a feature added to
+one appears in the other.
+
 ## Using it
 
 1. **Open photos**: drop them onto the window, or File > Open Photos.
@@ -87,7 +106,9 @@ repository, followed by a rebuild.
 ## For developers
 
 ```
-crates/studio-core/   prompt library, guardrails, photo preparation, cost, Gemini client
+crates/studio-core/   prompt library, guardrails, photo preparation, cost, export, Gemini client
+crates/studio-app/    workspace, settings, generation, crop and export operations (shared)
+crates/web/           the web version's local server
 crates/poc-cli/       command-line test tool (batch runs with an HTML report)
 app/src/              the interface (React, TypeScript, Tailwind)
 app/src-tauri/        the desktop shell and backend commands (Tauri, Rust)

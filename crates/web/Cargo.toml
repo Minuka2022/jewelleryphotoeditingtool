@@ -1,0 +1,22 @@
+[package]
+name = "jewelry-studio-web"
+description = "Web version: serves the Jewelry Studio interface to the browser on this computer."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "jewelry-studio-web"
+path = "src/main.rs"
+
+[dependencies]
+studio-app.workspace = true
+studio-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = "0.8.9"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "fs"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+rust-embed = { version = "8.14.0", features = ["mime-guess"] }
+zip = { version = "9.5.1", default-features = false }
+futures-util = { version = "0.3.34", default-features = false }
