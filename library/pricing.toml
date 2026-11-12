@@ -1,0 +1,43 @@
+# Models and prices, in US dollars per generated image (paid tier).
+# Read from Google's pricing page on the date below. Google changes model names
+# and prices often, so check https://ai.google.dev/gemini-api/docs/pricing
+# and update this file when they change. Nothing here is hard-coded in the app.
+
+checked_on = "2026-11-12"
+default_model = "gemini-nano-banana-2.1"
+default_size = "2K"
+
+[[model]]
+id = "gemini-nano-banana-2.1"
+label = "Nano Banana 2.1"
+note = "Newest and cheapest. Accepts up to 10 reference photos of an object."
+
+[model.per_image]
+"1K" = 0.0336
+"2K" = 0.0504
+"4K" = 0.113
+
+[model.batch_per_image]
+"1K" = 0.0168
+"2K" = 0.0252
+"4K" = 0.0567
+
+[[model]]
+id = "gemini-3.1-flash-image"
+label = "Nano Banana 2"
+note = "Previous fast model."
+
+[model.per_image]
+"1K" = 0.067
+"2K" = 0.101
+"4K" = 0.151
+
+[[model]]
+id = "gemini-3-pro-image"
+label = "Nano Banana Pro"
+note = "Highest quality and most expensive. Accepts up to 6 reference photos of an object."
+
+[model.per_image]
+"1K" = 0.134
+"2K" = 0.134
+"4K" = 0.24

@@ -1,0 +1,14 @@
+id = "black-velvet"
+name = "Black Velvet"
+version = 1
+description = "Dark, luxurious boutique look with a single spotlight."
+tone = "dark"
+categories = []
+
+prompt = """
+Place the {item} on rich black velvet with a fine, visible nap, against a deep black background that \
+falls away into darkness. A single focused spotlight from above-left creates crisp sparkle in the \
+stones and bright edge highlights on the metal, with a soft falloff across the velvet. No props. \
+Luxurious, high-end boutique mood with strong contrast."""
+
+avoid = ["props", "dust or lint on the velvet", "coloured light"]

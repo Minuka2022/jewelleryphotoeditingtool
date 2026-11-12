@@ -1,0 +1,15 @@
+id = "dark-slate"
+name = "Dark Slate"
+version = 1
+description = "Moody, modern look on textured slate with dramatic low-key light."
+tone = "dark"
+categories = []
+
+prompt = """
+Place the {item} on a dark charcoal slate slab with a natural matte texture and fine ridges, against \
+a dark graphite background. Dramatic low-key lighting: one soft key light from the right rakes across \
+the slate to reveal its texture and gives the metal bright rim highlights, with a subtle cool fill \
+light so that every detail of the {item} stays readable. A few tiny water droplets rest on the slate \
+away from the {item}. Moody, modern, premium look."""
+
+avoid = ["props touching or overlapping the item", "the item lost in shadow"]

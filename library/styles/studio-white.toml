@@ -1,0 +1,22 @@
+# One output style. The file name must match "id".
+# Describe only the scene: surface, background, props, lighting and mood.
+# Never describe the jewelry itself, its angle, or anyone wearing it.
+# Bump "version" every time you change "prompt".
+
+id = "studio-white"
+name = "Studio White"
+version = 1
+description = "Clean white catalogue look with a soft shadow. Suits online marketplaces."
+tone = "bright"
+
+# Category ids this style may be used for. Leave empty to allow every category.
+categories = []
+
+prompt = """
+Place the {item} on a seamless pure white studio surface that blends into a pure white background, \
+with no visible horizon line. Light the scene with large, soft, diffused studio lights on both sides \
+for even, bright illumination and clean highlights on the metal. A soft, natural contact shadow sits \
+directly beneath the {item}, with a very faint reflection on the surface. No props. Crisp, neutral \
+colour balance and a clean catalogue look suitable for an online store."""
+
+avoid = ["props", "coloured or textured backgrounds", "harsh shadows"]

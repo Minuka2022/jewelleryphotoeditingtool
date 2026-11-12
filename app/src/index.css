@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* Dark, neutral workspace so the photos are the only colour on screen. */
+@theme {
+  --color-canvas: #1b1b1b;
+  --color-panel: #2b2b2b;
+  --color-raised: #383838;
+  --color-field: #1f1f1f;
+  --color-line: #161616;
+  --color-edge: #4a4a4a;
+  --color-ink: #dddddd;
+  --color-dim: #9b9b9b;
+  --color-accent: #2f8cf0;
+  --color-good: #3fb96b;
+  --color-bad: #f0645f;
+  --font-sans: "Segoe UI", system-ui, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--color-panel);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  user-select: none;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border: 2px solid var(--color-panel);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

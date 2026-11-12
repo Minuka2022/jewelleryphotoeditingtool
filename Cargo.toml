@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["crates/studio-core", "crates/poc-cli", "app/src-tauri"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+studio-core = { path = "crates/studio-core" }
+
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Stores the API key in the Windows Credential Manager.
+keyring = { version = "3", features = ["windows-native"] }
+# native-tls uses Windows' built-in TLS, so no C compiler is needed to build.
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-build = "2"
+tauri-plugin-dialog = "2"
+# Windows-only app: the installer itself is the update file, so archive support is not needed.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+toml = "0.8"
+
+[profile.release]
+strip = true

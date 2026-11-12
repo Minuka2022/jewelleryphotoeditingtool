@@ -1,0 +1,6 @@
+# Keep the same line endings on every machine, so the built-in prompt files
+# compiled into the app are byte-for-byte identical wherever it is built.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

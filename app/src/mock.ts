@@ -1,0 +1,225 @@
+// A stand-in backend used only when the interface is opened in a normal
+// browser instead of the desktop app. It keeps everything in memory and draws
+// placeholder pictures, so the interface can be developed and checked without
+// spending money on real generations.
+
+import type { Api } from './api';
+import type { ItemInfo, LibraryInfo, OutputInfo, Progress, SettingsInfo, StyleInfo } from './types';
+
+const picture = (background: string, label: string) =>
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+      <rect width="1200" height="900" fill="${background}"/>
+      <ellipse cx="600" cy="540" rx="210" ry="180" fill="none" stroke="#e2b85c" stroke-width="34"/>
+      <path d="M600 250l72 72-72 84-72-84z" fill="#9bd7ff" stroke="#fff" stroke-width="6"/>
+      <text x="40" y="860" font-family="Segoe UI, sans-serif" font-size="32" fill="#8a8a8a">${label}</text>
+    </svg>`,
+  );
+
+const backgrounds: Record<string, string> = {
+  'black-velvet': '#131316',
+  'dark-slate': '#3a3e45',
+  'studio-white': '#f4f4f1',
+  'white-marble': '#e9e7e2',
+};
+
+const style = (id: string, name: string, tone: StyleInfo['tone'], description: string): StyleInfo => ({
+  id,
+  name,
+  version: 1,
+  description,
+  tone,
+  categories: [],
+  prompt: `Place the {item} in the ${name} scene.`,
+  builtin: true,
+  thumbnail: null,
+});
+
+let library: LibraryInfo = {
+  categories: [
+    { id: 'jewelry', label: 'Jewelry (general)' },
+    { id: 'ring', label: 'Ring' },
+    { id: 'earrings', label: 'Earrings' },
+    { id: 'pendant', label: 'Pendant' },
+    { id: 'necklace', label: 'Necklace' },
+    { id: 'bracelet', label: 'Bracelet' },
+  ],
+  styles: [
+    style('black-velvet', 'Black Velvet', 'dark', 'Dark, luxurious boutique look with a single spotlight.'),
+    style('dark-slate', 'Dark Slate', 'dark', 'Moody, modern look on textured slate.'),
+    style('studio-white', 'Studio White', 'bright', 'Clean white catalogue look with a soft shadow.'),
+    style('white-marble', 'White Marble', 'bright', 'Bright, airy lifestyle look on marble.'),
+  ],
+  models: [
+    { id: 'gemini-nano-banana-2.1', label: 'Nano Banana 2.1', note: 'Newest and cheapest.', prices: { '1K': 0.0336, '2K': 0.0504, '4K': 0.113 } },
+    { id: 'gemini-3-pro-image', label: 'Nano Banana Pro', note: 'Highest quality.', prices: { '1K': 0.134, '2K': 0.134, '4K': 0.24 } },
+  ],
+  pricesCheckedOn: '2026-11-12',
+  problems: [],
+};
+
+let settings: SettingsInfo = {
+  model: 'gemini-nano-banana-2.1',
+  imageSize: '2K',
+  aspectRatio: null,
+  variants: 2,
+  hasApiKey: true,
+};
+
+let nextId = 1;
+const id = (prefix: string) => `${prefix}${nextId++}`;
+const now = () => new Date().toISOString();
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+
+const output = (itemName: string, styleId: string, runId: string, number: number): OutputInfo => {
+  const info = library.styles.find((s) => s.id === styleId)!;
+  return {
+    id: id('o'),
+    runId,
+    styleId,
+    styleName: info.name,
+    styleVersion: info.version,
+    status: 'none',
+    createdAt: now(),
+    model: settings.model,
+    imageSize: settings.imageSize,
+    costUsd: 0.0504,
+    note: null,
+    path: picture(backgrounds[styleId] ?? '#6d5a7a', `${itemName} / ${info.name} / option ${number}`),
+  };
+};
+
+const item = (name: string, category: string): ItemInfo => ({
+  id: id('i'),
+  name,
+  category,
+  width: 1200,
+  height: 900,
+  createdAt: now(),
+  reference: picture('#96897a', `${name} (reference)`),
+  outputs: [],
+});
+
+const items: ItemInfo[] = [];
+// "?demo" opens the preview with a photo and results already in place.
+if (new URLSearchParams(location.search).has('demo')) {
+  const ring = item('solitaire-01', 'ring');
+  ring.outputs = [
+    output(ring.name, 'black-velvet', 'r0', 1),
+    { ...output(ring.name, 'black-velvet', 'r0', 2), status: 'approved' },
+    output(ring.name, 'studio-white', 'r0', 1),
+    { ...output(ring.name, 'studio-white', 'r0', 2), status: 'rejected' },
+  ];
+  items.push(ring, item('pearl-studs', 'earrings'));
+}
+
+const find = (itemId: string) => {
+  const found = items.find((i) => i.id === itemId);
+  if (!found) throw 'That photo is no longer in the workspace.';
+  return found;
+};
+
+const progressHandlers = new Set<(progress: Progress) => void>();
+
+export const mockApi: Api = {
+  getLibrary: async () => copy(library),
+  getSettings: async () => copy(settings),
+  saveSettings: async (next) => copy((settings = { ...settings, ...next })),
+  setApiKey: async (key) => copy((settings = { ...settings, hasApiKey: key.trim() !== '' })),
+  checkApiKey: async () => `The key works and ${settings.model} is available.`,
+  listItems: async () => copy(items),
+  addItems: async (paths, category) => {
+    const added = paths.map((path) => item(path.replace(/^.*[\\/]/, '').replace(/\.\w+$/, ''), category));
+    items.push(...added);
+    return { items: copy(added), errors: [] };
+  },
+  updateItem: async (itemId, patch) => copy(Object.assign(find(itemId), patch)),
+  removeItem: async (itemId) => void items.splice(items.indexOf(find(itemId)), 1),
+  setOutputStatus: async (itemId, outputId, status) => {
+    const found = find(itemId);
+    found.outputs = found.outputs.map((o) => (o.id === outputId ? { ...o, status } : o));
+    return copy(found);
+  },
+  removeOutput: async (itemId, outputId) => {
+    const found = find(itemId);
+    found.outputs = found.outputs.filter((o) => o.id !== outputId);
+    return copy(found);
+  },
+  exportOutputs: async (selections) => selections.length,
+  checkStylePrompt: async (prompt) => ({
+    errors: /\b(hand|worn|side view|rotate)\b/i.test(prompt)
+      ? ['"hand" shows the item worn or on a body']
+      : [],
+    itemWords: ['ring', 'gold', 'diamond'].filter((word) => new RegExp(`\\b${word}\\b`, 'i').test(prompt)),
+  }),
+  importStyle: async (input) => {
+    const styleId = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!styleId) throw 'Give the style a name that contains letters or digits.';
+    if (library.styles.some((s) => s.id === styleId)) throw `A style named "${input.name}" already exists. Choose another name.`;
+    const created: StyleInfo = {
+      id: styleId,
+      name: input.name.trim(),
+      version: 1,
+      description: input.description,
+      tone: input.tone,
+      categories: input.categories,
+      prompt: input.prompt,
+      builtin: false,
+      thumbnail: input.imagePath ? picture('#7a5a6a', input.name) : null,
+    };
+    library = { ...library, styles: [...library.styles, created] };
+    return { styleId, library: copy(library) };
+  },
+  removeStyle: async (styleId) => {
+    library = { ...library, styles: library.styles.filter((s) => s.id !== styleId) };
+    return copy(library);
+  },
+  generate: async (args) => {
+    const found = find(args.itemId);
+    const runId = id('r');
+    const total = args.styleIds.length * args.variants;
+    let done = 0;
+    for (const styleId of args.styleIds) {
+      for (let number = 1; number <= args.variants; number++) {
+        await wait(700);
+        const created = output(found.name, styleId, runId, number);
+        found.outputs.push(created);
+        done += 1;
+        const progress: Progress = {
+          itemId: found.id,
+          runId,
+          done,
+          total,
+          styleId,
+          styleName: created.styleName,
+          number,
+          output: copy(created),
+          error: null,
+        };
+        progressHandlers.forEach((handler) => handler(progress));
+      }
+    }
+    return copy(found);
+  },
+  getVersion: async () => '0.2.0',
+  // "?update" previews the update banner.
+  checkForUpdate: async () =>
+    new URLSearchParams(location.search).has('update')
+      ? { version: '0.3.0', currentVersion: '0.2.0', notes: 'New styles and faster generation.' }
+      : null,
+  installUpdate: async () => {
+    await wait(1500);
+    throw 'Updates cannot be installed in the browser preview.';
+  },
+  onProgress: async (handler) => {
+    progressHandlers.add(handler);
+    return () => void progressHandlers.delete(handler);
+  },
+  onFilesDropped: async () => () => {},
+  pickPhotos: async () => [`sample-${nextId}.jpg`],
+  pickImage: async () => 'example-look.jpg',
+  pickFolder: async () => 'C:\\Exports',
+  fileSrc: (path) => path,
+};

@@ -1,0 +1,14 @@
+id = "white-marble"
+name = "White Marble"
+version = 1
+description = "Bright, airy lifestyle look on marble with soft window light."
+tone = "bright"
+categories = []
+
+prompt = """
+Place the {item} on a polished white Carrara marble surface with soft grey veining, against a softly \
+blurred, light neutral background. Soft natural window light comes from the left and casts gentle, \
+long shadows. A small sprig of eucalyptus lies out of focus near the edge of the frame, well away \
+from the {item} and not touching it. Fresh, elegant, airy lifestyle mood."""
+
+avoid = ["props touching or overlapping the item", "strong colour casts"]

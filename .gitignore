@@ -1,0 +1,14 @@
+# Build output
+target/
+node_modules/
+app/dist/
+app/src-tauri/gen/
+installer/
+
+# Secrets: the Gemini API key must never be committed
+.env
+
+# Inventory photos and generated results stay on this machine
+samples/*
+!samples/README.md
+output/

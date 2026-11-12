@@ -1,0 +1,96 @@
+# Master prompt: the layers that are shared by every output style.
+#
+# Every request sent to the model is built from four layers:
+#   1. [global]      written once, sent with every request   (this file)
+#   2. [[category]]  written once per jewelry category        (this file)
+#   3. style prompt  written once per output style            (library/styles/*.toml)
+#   4. user note     optional, typed per request
+#
+# "{item}" is replaced with the category's noun ("ring", "pair of earrings", ...).
+# Bump "version" whenever you change the wording, so every generated image
+# records which wording produced it.
+
+version = 1
+
+[global]
+role = "You are a professional jewelry product photographer and retoucher."
+
+task = """
+The attached reference photo shows one real {item} from a jewelry retailer's inventory. \
+Produce a new studio-quality product photograph of THIS EXACT {item} in the scene described below."""
+
+# Used in place of "task" when more than one reference photo is attached.
+task_multi = """
+The attached reference photos all show the same real {item} from a jewelry retailer's inventory. \
+The FIRST photo is the primary reference: match its viewing angle and orientation. \
+The other photos show the same {item} from other angles; use them only to understand its details. \
+Produce a new studio-quality product photograph of THIS EXACT {item} in the scene described below."""
+
+rules = [
+  "Reproduce the {item} exactly as it appears in the reference: the same design, silhouette and proportions; the same metal colour and finish; the same number, shape, cut, colour, size and arrangement of stones; the same settings and prongs; the same engravings, patterns, textures and links.",
+  "Do not add, remove, simplify, straighten, symmetrise, embellish or improve any part of the {item}. Do not invent details that are not visible in the reference.",
+  "Keep the same viewing angle and orientation of the {item} as in the reference. Do not rotate, tilt, flip or mirror it.",
+  "Show the whole {item}, with exactly the same number of pieces as in the reference. Do not crop or hide any part of it, and do not duplicate it.",
+  "Change only the environment: the background, surface, props, lighting and shadows. Highlights and reflections on the metal and stones may adapt naturally to the new lighting, but no shape may change.",
+  "Do not carry over anything else from the reference photo: not its background, hands, stands, price tags, labels, dust or clutter.",
+  "The result must look like a real photograph taken by a professional, not a 3D render or an illustration. Keep the {item} in sharp focus.",
+]
+
+avoid = [
+  "people, hands or other body parts",
+  "text, watermarks, logos, borders or frames",
+  "additional jewelry that is not in the reference",
+]
+
+# ---------------------------------------------------------------------------
+# Categories. "focus" tells the model which details matter most for that type.
+# "jewelry" is the fallback used when a photo has no category.
+# ---------------------------------------------------------------------------
+
+[[category]]
+id = "jewelry"
+label = "Jewelry (general)"
+noun = "piece of jewelry"
+focus = "Pay close attention to the overall silhouette, the metal colour, every stone and its setting, and any pattern or engraving."
+
+[[category]]
+id = "ring"
+label = "Ring"
+noun = "ring"
+focus = "Pay close attention to the band's profile and width, the number and shape of the prongs, the centre stone's cut and its size relative to the band, every side stone, and any engraving, milgrain or texture on the band."
+
+[[category]]
+id = "earrings"
+label = "Earrings"
+noun = "pair of earrings"
+focus = "Pay close attention to both earrings matching the reference individually, the posts, hooks or backs, the drop length, every stone and its setting, and how the pieces are arranged relative to each other."
+
+[[category]]
+id = "pendant"
+label = "Pendant"
+noun = "pendant"
+focus = "Pay close attention to the pendant's outline, the bail and how it attaches, every stone and its setting, any engraving, and the chain's link pattern if a chain is visible."
+
+[[category]]
+id = "necklace"
+label = "Necklace"
+noun = "necklace"
+focus = "Pay close attention to the chain's link pattern and thickness, the clasp, the layout and drape of the necklace as it lies in the reference, the spacing of any stones or beads, and the centrepiece if there is one."
+
+[[category]]
+id = "bracelet"
+label = "Bracelet"
+noun = "bracelet"
+focus = "Pay close attention to the link or bead pattern, the clasp, any charms and where they hang, every stone and its setting, and the shape the bracelet makes as it lies in the reference."
+
+[[category]]
+id = "bangle"
+label = "Bangle"
+noun = "bangle"
+focus = "Pay close attention to the bangle's thickness and cross-section, the carved or engraved pattern around it, any enamel work, every stone and its setting, and the hinge or opening if there is one."
+
+[[category]]
+id = "brooch"
+label = "Brooch"
+noun = "brooch"
+focus = "Pay close attention to the brooch's outline, the fine metalwork, every stone and its setting, and any enamel or engraved detail."
