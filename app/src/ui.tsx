@@ -115,6 +115,7 @@ const icons = {
   check: 'M5 12.5l4.5 4.5L19 7.5',
   cross: 'M6 6l12 12M18 6L6 18',
   trash: 'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13',
+  edit: 'M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4',
   plus: 'M12 5v14M5 12h14',
   folder: 'M3 7a1 1 0 011-1h5l2 2h8a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V7z',
 } as const;

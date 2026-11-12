@@ -1,7 +1,7 @@
 //! Everything the app does, without any window or network code: the prompt
 //! library, the settings, the workspace, and planning what to generate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,35 +10,39 @@ use serde::{Deserialize, Serialize};
 use studio_core::cost::Pricing;
 use studio_core::gemini::{GenerateRequest, GeneratedImage};
 use studio_core::guardrails;
-use studio_core::library::{Library, NewStyle, SceneTone, StyleTemplate};
+use studio_core::library::{Library, Look, NewStyle, SceneTone, StyleTemplate};
 use studio_core::prompt::{build_prompt, PromptRequest};
 use studio_core::reference::ReferenceImage;
 
 use crate::store::{new_id, now, ItemRecord, OutputRecord, OutputStatus, Store};
 
-/// The library that ships with the app. These files are owned by the app and
-/// rewritten on every start, so updates can improve them. Styles the user
-/// imports live next to them under other names and are never touched.
-const BUILTIN_FILES: [(&str, &str); 6] = [
+/// Files owned by the app and rewritten on every start, so that updates can
+/// improve the master prompt and the price list.
+const APP_FILES: [(&str, &str); 2] = [
     ("master.toml", include_str!("../../../library/master.toml")),
     (
         "pricing.toml",
         include_str!("../../../library/pricing.toml"),
     ),
+];
+
+/// Styles a new installation starts with, by id. Each is written once; from
+/// then on it belongs to the user, who may edit or delete it like any other.
+const STARTER_STYLES: [(&str, &str); 4] = [
     (
-        "styles/black-velvet.toml",
+        "black-velvet",
         include_str!("../../../library/styles/black-velvet.toml"),
     ),
     (
-        "styles/dark-slate.toml",
+        "dark-slate",
         include_str!("../../../library/styles/dark-slate.toml"),
     ),
     (
-        "styles/studio-white.toml",
+        "studio-white",
         include_str!("../../../library/styles/studio-white.toml"),
     ),
     (
-        "styles/white-marble.toml",
+        "white-marble",
         include_str!("../../../library/styles/white-marble.toml"),
     ),
 ];
@@ -114,10 +118,10 @@ pub struct StyleInfo {
     pub version: u32,
     pub description: String,
     pub tone: SceneTone,
+    /// Whether results look photographed or like a 3D render.
+    pub look: Look,
     pub categories: Vec<String>,
     pub prompt: String,
-    /// Built-in styles cannot be deleted.
-    pub builtin: bool,
     /// Full path of the example picture, if the style has one.
     pub thumbnail: Option<String>,
 }
@@ -168,6 +172,8 @@ pub struct ImportStyle {
     pub description: String,
     pub prompt: String,
     pub tone: SceneTone,
+    #[serde(default)]
+    pub look: Look,
     #[serde(default)]
     pub categories: Vec<String>,
     pub image_path: Option<String>,
@@ -234,7 +240,7 @@ impl Studio {
     /// Opens the app's data folder, creating and refreshing it as needed.
     pub fn open(data_dir: PathBuf) -> Result<Self, String> {
         let library_dir = data_dir.join("library");
-        seed_library(&library_dir)?;
+        seed_library(&data_dir)?;
         let (library, problems) = Library::load_lenient(&library_dir).map_err(|e| e.to_string())?;
         let store = Store::open(data_dir.join("items"))?;
         let settings = fs::read_to_string(data_dir.join("settings.json"))
@@ -283,9 +289,9 @@ impl Studio {
                     version: style.version,
                     description: style.description.clone(),
                     tone: style.tone,
+                    look: style.look,
                     categories: style.categories.clone(),
                     prompt: style.prompt.clone(),
-                    builtin: is_builtin(&style.id),
                     thumbnail: style
                         .image
                         .as_ref()
@@ -427,27 +433,22 @@ impl Studio {
     }
 
     pub fn import_style(&mut self, input: ImportStyle) -> Result<StyleTemplate, String> {
-        let new = NewStyle {
-            name: input.name,
-            description: input.description,
-            prompt: input.prompt,
-            tone: input.tone,
-            categories: input.categories,
-            image: input
-                .image_path
-                .filter(|path| !path.trim().is_empty())
-                .map(PathBuf::from),
-        };
         let library_dir = self.library_dir();
         self.library
-            .import_style(&library_dir, new)
+            .import_style(&library_dir, input.into())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Saves changes to an existing style. Leaving `image_path` empty keeps
+    /// the style's current picture.
+    pub fn update_style(&mut self, id: &str, input: ImportStyle) -> Result<StyleTemplate, String> {
+        let library_dir = self.library_dir();
+        self.library
+            .update_style(&library_dir, id, input.into())
             .map_err(|e| e.to_string())
     }
 
     pub fn remove_style(&mut self, id: &str) -> Result<(), String> {
-        if is_builtin(id) {
-            return Err("Built-in styles cannot be deleted.".into());
-        }
         let library_dir = self.library_dir();
         self.library
             .remove_style(&library_dir, id)
@@ -603,24 +604,64 @@ impl Studio {
     }
 }
 
-fn seed_library(dir: &Path) -> Result<(), String> {
-    for (relative, content) in BUILTIN_FILES {
-        let path = dir.join(relative);
-        if fs::read_to_string(&path).is_ok_and(|existing| existing == content) {
-            continue;
+impl From<ImportStyle> for NewStyle {
+    fn from(input: ImportStyle) -> Self {
+        Self {
+            name: input.name,
+            description: input.description,
+            prompt: input.prompt,
+            tone: input.tone,
+            look: input.look,
+            categories: input.categories,
+            image: input
+                .image_path
+                .filter(|path| !path.trim().is_empty())
+                .map(PathBuf::from),
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
-        }
-        fs::write(&path, content).map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
     }
-    Ok(())
 }
 
-fn is_builtin(style_id: &str) -> bool {
-    let file = format!("styles/{style_id}.toml");
-    BUILTIN_FILES.iter().any(|(relative, _)| *relative == file)
+/// Prepares the library inside the data folder: refreshes the app's own
+/// files, and gives a starter style to any data folder that has never had it.
+fn seed_library(data_dir: &Path) -> Result<(), String> {
+    let write = |path: &Path, content: &str| -> Result<(), String> {
+        fs::write(path, content).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+    };
+    let library_dir = data_dir.join("library");
+    let styles_dir = library_dir.join("styles");
+    fs::create_dir_all(&styles_dir)
+        .map_err(|e| format!("Cannot create {}: {e}", styles_dir.display()))?;
+
+    for (name, content) in APP_FILES {
+        let path = library_dir.join(name);
+        if !fs::read_to_string(&path).is_ok_and(|existing| existing == content) {
+            write(&path, content)?;
+        }
+    }
+
+    // Remembering which starter styles were handed out is what lets the user
+    // delete one without it coming back at the next start.
+    let record_path = data_dir.join("starter-styles.json");
+    let mut given: BTreeSet<String> = fs::read_to_string(&record_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let mut changed = false;
+    for (id, content) in STARTER_STYLES {
+        if given.insert(id.to_owned()) {
+            changed = true;
+            let path = styles_dir.join(format!("{id}.toml"));
+            // An existing file may already carry the user's edits.
+            if !path.exists() {
+                write(&path, content)?;
+            }
+        }
+    }
+    if changed {
+        let json = serde_json::to_string(&given).map_err(|e| e.to_string())?;
+        write(&record_path, &json)?;
+    }
+    Ok(())
 }
 
 fn display(path: &Path) -> String {
@@ -703,7 +744,7 @@ pub(crate) mod tests {
         let library = studio.library_info();
 
         assert_eq!(library.styles.len(), 4);
-        assert!(library.styles.iter().all(|style| style.builtin));
+        assert!(library.styles.iter().all(|style| style.look == Look::Photo));
         assert!(library.categories.iter().any(|c| c.id == "ring"));
         assert!(library.problems.is_empty());
         assert_eq!(studio.settings().model, "gemini-nano-banana-2.1");
@@ -813,6 +854,7 @@ pub(crate) mod tests {
                 description: String::new(),
                 prompt: "Place the {item} on pale linen.".into(),
                 tone: SceneTone::Bright,
+                look: Look::Photo,
                 categories: vec!["necklace".into()],
                 image_path: None,
             })
@@ -825,8 +867,86 @@ pub(crate) mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn style_input(name: &str, prompt: &str, look: Look) -> ImportStyle {
+        ImportStyle {
+            name: name.into(),
+            description: String::new(),
+            prompt: prompt.into(),
+            tone: SceneTone::Dark,
+            look,
+            categories: vec!["ring".into()],
+            image_path: None,
+        }
+    }
+
     #[test]
-    fn imported_styles_can_be_deleted_but_built_in_ones_cannot() {
+    fn starter_styles_can_be_edited_and_deleted_and_stay_that_way() {
+        let dir = temp_dir("starter");
+        let mut studio = Studio::open(dir.join("data")).unwrap();
+
+        let edited = studio
+            .update_style(
+                "black-velvet",
+                style_input(
+                    "Black Velvet 3D",
+                    "Place the {item} on black velvet.",
+                    Look::Render,
+                ),
+            )
+            .unwrap();
+        assert_eq!((edited.id.as_str(), edited.version), ("black-velvet", 2));
+        studio.remove_style("dark-slate").unwrap();
+        assert!(studio.remove_style("dark-slate").is_err());
+        drop(studio);
+
+        // After a restart the edit is kept and the deleted style stays gone.
+        let mut studio = Studio::open(dir.join("data")).unwrap();
+        let library = studio.library_info();
+        let ids: Vec<&str> = library.styles.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["black-velvet", "studio-white", "white-marble"]);
+        let velvet = &library.styles[0];
+        assert_eq!(
+            (velvet.name.as_str(), velvet.look),
+            ("Black Velvet 3D", Look::Render)
+        );
+        assert_eq!(velvet.categories, ["ring"]);
+
+        // Every style can go; the app still opens, and new ones can be added.
+        for id in ids {
+            studio.remove_style(id).unwrap();
+        }
+        drop(studio);
+        let mut studio = Studio::open(dir.join("data")).unwrap();
+        assert!(studio.library_info().styles.is_empty());
+        studio
+            .import_style(style_input(
+                "My Look",
+                "pale linen, soft light",
+                Look::Photo,
+            ))
+            .unwrap();
+        assert_eq!(studio.library_info().styles.len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_data_folder_from_an_older_version_keeps_its_styles() {
+        // Version 0.2.0 wrote the starter styles but kept no record of it.
+        let dir = temp_dir("older");
+        let styles = dir.join("data/library/styles");
+        fs::create_dir_all(&styles).unwrap();
+        let edited = STARTER_STYLES[0].1.replace("Black Velvet", "My Velvet");
+        fs::write(styles.join("black-velvet.toml"), edited).unwrap();
+
+        let studio = Studio::open(dir.join("data")).unwrap();
+        let library = studio.library_info();
+        assert_eq!(library.styles.len(), 4);
+        assert_eq!(library.styles[0].name, "My Velvet");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn imported_styles_keep_their_picture_and_can_be_deleted() {
         let dir = temp_dir("styles");
         let mut studio = Studio::open(dir.join("data")).unwrap();
         let picture = photo(&dir, "look.png");
@@ -837,6 +957,7 @@ pub(crate) mod tests {
                 description: "Romantic".into(),
                 prompt: "scattered rose petals, soft light".into(),
                 tone: SceneTone::Bright,
+                look: Look::Render,
                 categories: vec!["ring".into()],
                 image_path: Some(picture.to_string_lossy().into_owned()),
             })
@@ -845,17 +966,29 @@ pub(crate) mod tests {
 
         let info = studio.library_info();
         let imported = info.styles.iter().find(|s| s.id == "rose-petals").unwrap();
-        assert!(!imported.builtin);
-        assert!(Path::new(imported.thumbnail.as_ref().unwrap()).is_file());
+        assert_eq!(imported.look, Look::Render);
+        let thumbnail = imported.thumbnail.clone().unwrap();
+        assert!(Path::new(&thumbnail).is_file());
 
-        // The imported style is still there after a restart.
+        // The imported style is still there after a restart, and editing it
+        // without choosing a new picture keeps the old one.
         drop(studio);
         let mut studio = Studio::open(dir.join("data")).unwrap();
         assert_eq!(studio.library_info().styles.len(), 5);
+        studio
+            .update_style(
+                "rose-petals",
+                style_input("Rose Petals", "ivory silk", Look::Render),
+            )
+            .unwrap();
+        let info = studio.library_info();
+        let edited = info.styles.iter().find(|s| s.id == "rose-petals").unwrap();
+        assert_eq!(edited.thumbnail.as_deref(), Some(thumbnail.as_str()));
+        assert_eq!(edited.version, 2);
 
-        assert!(studio.remove_style("black-velvet").is_err());
         studio.remove_style("rose-petals").unwrap();
         assert_eq!(studio.library_info().styles.len(), 4);
+        assert!(!Path::new(&thumbnail).exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 

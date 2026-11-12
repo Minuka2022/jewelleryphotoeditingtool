@@ -188,6 +188,20 @@ fn import_style(state: State<'_, AppState>, style: ImportStyle) -> Result<Import
 }
 
 #[tauri::command]
+fn update_style(
+    state: State<'_, AppState>,
+    id: String,
+    style: ImportStyle,
+) -> Result<ImportedStyle, String> {
+    let mut studio = lock(&state)?;
+    let updated = studio.update_style(&id, style)?;
+    Ok(ImportedStyle {
+        style_id: updated.id,
+        library: studio.library_info(),
+    })
+}
+
+#[tauri::command]
 fn remove_style(state: State<'_, AppState>, id: String) -> Result<LibraryInfo, String> {
     let mut studio = lock(&state)?;
     studio.remove_style(&id)?;
@@ -321,6 +335,7 @@ fn main() {
             export_outputs,
             check_style_prompt,
             import_style,
+            update_style,
             remove_style,
             generate,
             check_for_update,

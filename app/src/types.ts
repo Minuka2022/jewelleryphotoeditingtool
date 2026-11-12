@@ -1,6 +1,8 @@
 // Shapes of the data exchanged with the Rust backend (see src-tauri/src).
 
 export type Tone = 'bright' | 'neutral' | 'dark';
+/** Whether results look photographed or like a flawless 3D CAD render. */
+export type Look = 'photo' | 'render';
 export type OutputStatus = 'none' | 'approved' | 'rejected';
 
 export interface Category {
@@ -14,10 +16,10 @@ export interface StyleInfo {
   version: number;
   description: string;
   tone: Tone;
+  look: Look;
   /** Category ids the style is for. Empty means every category. */
   categories: string[];
   prompt: string;
-  builtin: boolean;
   /** Full path of the example picture, if there is one. */
   thumbnail: string | null;
 }
@@ -87,6 +89,7 @@ export interface ImportStyle {
   description: string;
   prompt: string;
   tone: Tone;
+  look: Look;
   categories: string[];
   imagePath: string | null;
 }

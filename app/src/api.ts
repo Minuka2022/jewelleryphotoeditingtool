@@ -38,6 +38,8 @@ export interface Api {
   exportOutputs(selections: OutputRef[], destination: string): Promise<number>;
   checkStylePrompt(prompt: string): Promise<PromptCheck>;
   importStyle(style: ImportStyle): Promise<ImportedStyle>;
+  /** A null `imagePath` keeps the style's current picture. */
+  updateStyle(id: string, style: ImportStyle): Promise<ImportedStyle>;
   removeStyle(id: string): Promise<LibraryInfo>;
   generate(args: GenerateArgs): Promise<ItemInfo>;
   getVersion(): Promise<string>;
@@ -73,6 +75,7 @@ const tauriApi: Api = {
   exportOutputs: (selections, destination) => invoke('export_outputs', { selections, destination }),
   checkStylePrompt: (prompt) => invoke('check_style_prompt', { prompt }),
   importStyle: (style) => invoke('import_style', { style }),
+  updateStyle: (id, style) => invoke('update_style', { id, style }),
   removeStyle: (id) => invoke('remove_style', { id }),
   generate: (args) => invoke('generate', { args }),
   getVersion,

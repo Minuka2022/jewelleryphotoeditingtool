@@ -33,7 +33,9 @@ Help > Keyboard Shortcuts lists every shortcut.
 
 Styles panel > **Import style**. Give it a name, optionally an example picture
 (used as the thumbnail only), choose which jewelry types it is for, and write
-the prompt. Describe only the scene (surface, background, props, lighting,
+the prompt. **Finish** chooses between a result that looks like a real
+photograph and one with the flawless look of a 3D CAD render. Describe only
+the scene (surface, background, props, lighting,
 mood) and write `{item}` where the jewelry goes. Wording that would change the
 jewelry itself (a different angle, worn on a hand, added stones) is refused.
 

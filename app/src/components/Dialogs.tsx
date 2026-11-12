@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { api, errorText } from '../api';
 import { useStudio } from '../store';
-import type { PromptCheck, Tone } from '../types';
+import type { Look, PromptCheck, Tone } from '../types';
 import { Button, Field, Modal, cx, inputClass } from '../ui';
 
 function SettingsDialog() {
@@ -77,15 +77,22 @@ const tones: [Tone, string][] = [
   ['dark', 'Dark scene'],
 ];
 
-function ImportStyleDialog() {
-  const { library, activeItem, importStyle, setDialog } = useStudio();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [tone, setTone] = useState<Tone>('neutral');
-  // Start with the open photo's type ticked, since that is the usual intent.
+const finishes: [Look, string, string][] = [
+  ['photo', 'Photograph', 'Looks like a real studio photograph.'],
+  ['render', '3D render (CAD look)', 'Flawless computer-rendered catalogue look: mirror-smooth metal, razor-sharp stones.'],
+];
+
+/** Adds a new style, or edits `editingStyle` when one is set. */
+function StyleDialog() {
+  const { library, activeItem, saveStyle, setDialog, editingStyle: editing } = useStudio();
+  const [look, setLook] = useState<Look>(editing?.look ?? 'photo');
+  const [name, setName] = useState(editing?.name ?? '');
+  const [description, setDescription] = useState(editing?.description ?? '');
+  const [prompt, setPrompt] = useState(editing?.prompt ?? '');
+  const [tone, setTone] = useState<Tone>(editing?.tone ?? 'neutral');
+  // A new style starts with the open photo's type ticked, the usual intent.
   const [categories, setCategories] = useState<string[]>(
-    activeItem && activeItem.category !== 'jewelry' ? [activeItem.category] : [],
+    editing ? editing.categories : activeItem && activeItem.category !== 'jewelry' ? [activeItem.category] : [],
   );
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [check, setCheck] = useState<PromptCheck | null>(null);
@@ -127,7 +134,7 @@ function ImportStyleDialog() {
   const save = async () => {
     setSaving(true);
     setError(null);
-    const problem = await importStyle({ name, description, prompt, tone, categories, imagePath });
+    const problem = await saveStyle({ name, description, prompt, tone, look, categories, imagePath });
     setSaving(false);
     if (problem) setError(problem);
     else close();
@@ -135,14 +142,19 @@ function ImportStyleDialog() {
 
   return (
     <Modal
-      title="Import Style"
+      title={editing ? 'Edit Style' : 'Import Style'}
       width="w-[560px]"
       onClose={close}
       footer={
         <>
+          {editing && (
+            <span className="mr-auto self-center text-[11px] text-dim">
+              Version {editing.version}. Changing the prompt or the finish makes it version {editing.version + 1}.
+            </span>
+          )}
           <Button onClick={close}>Cancel</Button>
           <Button variant="primary" disabled={saving || blocked || !name.trim() || !prompt.trim()} onClick={save}>
-            Save style
+            {editing ? 'Save changes' : 'Save style'}
           </Button>
         </>
       }
@@ -163,7 +175,13 @@ function ImportStyleDialog() {
       >
         <div className="flex items-center gap-2">
           <Button onClick={chooseImage}>Choose image...</Button>
-          <span className="truncate text-dim">{imagePath ? imagePath.replace(/^.*[\\/]/, '') : 'No image chosen'}</span>
+          <span className="truncate text-dim">
+            {imagePath
+              ? imagePath.replace(/^.*[\\/]/, '')
+              : editing?.thumbnail
+                ? 'Keeping the current picture'
+                : 'No image chosen'}
+          </span>
         </div>
       </Field>
 
@@ -194,6 +212,25 @@ function ImportStyleDialog() {
           and write {'{item}'} instead, or the AI may change your piece to match.
         </p>
       )}
+
+      <Field label="Finish" hint={finishes.find(([id]) => id === look)?.[2]}>
+        <div className="flex flex-wrap gap-1.5">
+          {finishes.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={look === id}
+              onClick={() => setLook(id)}
+              className={cx(
+                'rounded-full border px-2.5 py-0.5',
+                look === id ? 'border-accent bg-accent/25 text-ink' : 'border-edge text-dim hover:text-ink',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
 
       <Field label="Use this style for" hint="Leave everything off to use it for every type of jewelry.">
         <div className="flex flex-wrap gap-1.5">
@@ -339,7 +376,7 @@ export function Dialogs() {
   return (
     <>
       {dialog === 'settings' && <SettingsDialog />}
-      {dialog === 'import-style' && <ImportStyleDialog />}
+      {dialog === 'import-style' && <StyleDialog />}
       {dialog === 'shortcuts' && <ShortcutsDialog />}
       <ConfirmDialog />
       <Toasts />

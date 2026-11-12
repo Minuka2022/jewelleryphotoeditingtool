@@ -81,10 +81,14 @@ const swatches: Record<Tone, string> = {
 };
 
 function StyleCard({ style, item }: { style: StyleInfo; item: ItemInfo | null }) {
-  const { library, selectedStyles, toggleStyle, removeStyle } = useStudio();
+  const { library, selectedStyles, toggleStyle, removeStyle, openStyleDialog } = useStudio();
   const selected = selectedStyles.includes(style.id);
   const fits = !item || styleFits(style, item.category);
-  const categoryLabel = library?.categories.find((category) => category.id === item?.category)?.label;
+  const labelOf = (id?: string) => library?.categories.find((category) => category.id === id)?.label;
+  const categoryLabel = labelOf(item?.category);
+  // The jewelry types this style is filed under.
+  const filedUnder =
+    style.categories.length === 0 ? 'All types' : style.categories.map((id) => labelOf(id) ?? id).join(', ');
 
   return (
     <div className={cx('group relative', !fits && 'opacity-35')}>
@@ -103,6 +107,9 @@ function StyleCard({ style, item }: { style: StyleInfo; item: ItemInfo | null })
         ) : (
           <div className="h-16 w-full" style={{ background: swatches[style.tone] }} />
         )}
+        {style.look === 'render' && (
+          <span className="absolute top-1 left-1 rounded bg-black/70 px-1 text-[10px] font-semibold text-ink">3D</span>
+        )}
         <span className="flex items-center gap-1 px-1.5 py-1">
           <span
             className={cx(
@@ -114,19 +121,80 @@ function StyleCard({ style, item }: { style: StyleInfo; item: ItemInfo | null })
           </span>
           <span className="truncate text-[11px]">{style.name}</span>
         </span>
+        <span className="block truncate px-1.5 pb-1 text-[10px] text-dim" title={filedUnder}>
+          {filedUnder}
+        </span>
       </button>
-      {!style.builtin && (
+      <div className="absolute top-1 right-1 hidden gap-1 group-focus-within:flex group-hover:flex">
+        <button
+          type="button"
+          aria-label={`Edit the style ${style.name}`}
+          title="Edit this style"
+          onClick={() => openStyleDialog(style)}
+          className="rounded bg-black/70 p-1 text-ink hover:text-accent"
+        >
+          <Icon name="edit" size={11} />
+        </button>
         <button
           type="button"
           aria-label={`Delete the style ${style.name}`}
           title="Delete this style"
           onClick={() => removeStyle(style)}
-          className="absolute top-1 right-1 hidden rounded bg-black/70 p-1 text-ink group-hover:block hover:text-bad"
+          className="rounded bg-black/70 p-1 text-ink hover:text-bad"
         >
           <Icon name="trash" size={11} />
         </button>
-      )}
+      </div>
     </div>
+  );
+}
+
+/** The Styles panel: a filter by jewelry type above the grid of styles. */
+function Styles({ item }: { item: ItemInfo | null }) {
+  const { library, styleFilter, setStyleFilter } = useStudio();
+  if (!library) return null;
+
+  const types = library.categories.filter((category) => category.id !== 'jewelry');
+  const itemLabel = library.categories.find((category) => category.id === item?.category)?.label;
+  // "auto" means the open photo's type; with no photo open it shows everything.
+  const filter = styleFilter === 'auto' && !item ? 'all' : styleFilter;
+  const wanted = filter === 'auto' ? item!.category : filter;
+  const visible = filter === 'all' ? library.styles : library.styles.filter((style) => styleFits(style, wanted));
+  const wantedLabel = library.categories.find((category) => category.id === wanted)?.label ?? 'this type';
+
+  return (
+    <>
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-2 py-1.5">
+        <span className="text-[11px] text-dim">Show</span>
+        <Select
+          aria-label="Filter styles by jewelry type"
+          className="min-w-0 flex-1"
+          value={filter}
+          onChange={(event) => setStyleFilter(event.target.value)}
+        >
+          {item && <option value="auto">For this photo ({itemLabel})</option>}
+          <option value="all">All styles</option>
+          {types.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.label}
+            </option>
+          ))}
+        </Select>
+        <span className="text-[11px] text-dim tabular-nums">{visible.length}</span>
+      </div>
+      <div className="grid grid-cols-2 content-start gap-2 overflow-y-auto p-2">
+        {visible.map((style) => (
+          <StyleCard key={style.id} style={style} item={item} />
+        ))}
+        {visible.length === 0 && (
+          <p className="col-span-2 px-1 py-2 text-dim">
+            {library.styles.length === 0
+              ? 'You have no styles yet. Use Import style to add one.'
+              : `No styles for ${wantedLabel} yet. Import one, or choose All styles.`}
+          </p>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -168,7 +236,7 @@ function History({ item }: { item: ItemInfo }) {
 }
 
 export function SidePanels() {
-  const { library, activeItem, setDialog } = useStudio();
+  const { activeItem, openStyleDialog } = useStudio();
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l border-line bg-panel">
       <Section title="Properties">
@@ -182,15 +250,13 @@ export function SidePanels() {
           <button
             type="button"
             className="flex items-center gap-1 text-[11px] text-accent hover:brightness-125"
-            onClick={() => setDialog('import-style')}
+            onClick={() => openStyleDialog()}
           >
             <Icon name="plus" size={11} /> Import style
           </button>
         }
       >
-        <div className="grid grid-cols-2 content-start gap-2 overflow-y-auto p-2">
-          {library?.styles.map((style) => <StyleCard key={style.id} style={style} item={activeItem} />)}
-        </div>
+        <Styles item={activeItem} />
       </Section>
 
       <Section title="History" className="h-44">

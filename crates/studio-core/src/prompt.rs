@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 use crate::guardrails;
-use crate::library::{JewelryCategory, MasterPrompts, StyleTemplate, ITEM_PLACEHOLDER};
+use crate::library::{JewelryCategory, Look, MasterPrompts, StyleTemplate, ITEM_PLACEHOLDER};
 
 pub struct PromptRequest<'a> {
     pub master: &'a MasterPrompts,
@@ -73,8 +73,13 @@ pub fn build_prompt(request: &PromptRequest<'_>) -> Result<BuiltPrompt, PromptEr
 
     let mut text = format!("{}\n\n{}", fill(&global.role), fill(task));
 
+    // The style decides the last rule: a real photograph or a flawless render.
+    let finish = match style.look {
+        Look::Photo => &global.finish_photo,
+        Look::Render => &global.finish_render,
+    };
     text.push_str("\n\nRULES (these override everything else in this request):");
-    for (index, rule) in global.rules.iter().enumerate() {
+    for (index, rule) in global.rules.iter().chain([finish]).enumerate() {
         text.push_str(&format!("\n{}. {}", index + 1, fill(rule)));
     }
 
@@ -173,6 +178,40 @@ mod tests {
                 assert!(!prompt.text.contains("EXTRA NOTE"));
             }
         }
+    }
+
+    #[test]
+    fn the_last_rule_follows_the_styles_look() {
+        let library = shipped_library();
+        let mut style = library.style("studio-white").unwrap().clone();
+        let build = |style: &StyleTemplate| {
+            build_prompt(&PromptRequest {
+                master: &library.master,
+                category: library.category("ring").unwrap(),
+                style,
+                reference_count: 1,
+                user_note: None,
+            })
+            .unwrap()
+            .text
+        };
+        let last_rule = library.master.global.rules.len() + 1;
+
+        let photo = build(&style);
+        assert!(photo.contains(&format!(
+            "{last_rule}. The result must look like a real photograph"
+        )));
+        assert!(!photo.contains("3D CAD jewelry render"));
+
+        style.look = Look::Render;
+        let render = build(&style);
+        assert!(render.contains(&format!(
+            "{last_rule}. The result must look like a flawless high-end 3D CAD jewelry render"
+        )));
+        assert!(!render.contains("must look like a real photograph"));
+        // Whatever the look, the design itself stays protected.
+        assert!(render.contains("1. Reproduce the ring exactly"));
+        assert!(render.contains("The design of the ring must still match the reference exactly"));
     }
 
     #[test]

@@ -30,9 +30,9 @@ const style = (id: string, name: string, tone: StyleInfo['tone'], description: s
   version: 1,
   description,
   tone,
+  look: 'photo',
   categories: [],
   prompt: `Place the {item} in the ${name} scene.`,
-  builtin: true,
   thumbnail: null,
 });
 
@@ -164,12 +164,31 @@ export const mockApi: Api = {
       version: 1,
       description: input.description,
       tone: input.tone,
+      look: input.look,
       categories: input.categories,
       prompt: input.prompt,
-      builtin: false,
       thumbnail: input.imagePath ? picture('#7a5a6a', input.name) : null,
     };
     library = { ...library, styles: [...library.styles, created] };
+    return { styleId, library: copy(library) };
+  },
+  updateStyle: async (styleId, input) => {
+    const current = library.styles.find((s) => s.id === styleId);
+    if (!current) throw `There is no style "${styleId}".`;
+    if (!input.name.trim()) throw 'Give the style a name.';
+    const changesResults = input.prompt !== current.prompt || input.look !== current.look;
+    const updated: StyleInfo = {
+      ...current,
+      name: input.name.trim(),
+      description: input.description,
+      tone: input.tone,
+      look: input.look,
+      categories: input.categories,
+      prompt: input.prompt,
+      version: current.version + (changesResults ? 1 : 0),
+      thumbnail: input.imagePath ? picture('#5a6a7a', input.name) : current.thumbnail,
+    };
+    library = { ...library, styles: library.styles.map((s) => (s.id === styleId ? updated : s)) };
     return { styleId, library: copy(library) };
   },
   removeStyle: async (styleId) => {

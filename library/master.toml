@@ -10,21 +10,21 @@
 # Bump "version" whenever you change the wording, so every generated image
 # records which wording produced it.
 
-version = 1
+version = 2
 
 [global]
 role = "You are a professional jewelry product photographer and retoucher."
 
 task = """
 The attached reference photo shows one real {item} from a jewelry retailer's inventory. \
-Produce a new studio-quality product photograph of THIS EXACT {item} in the scene described below."""
+Produce a new studio-quality product image of THIS EXACT {item} in the scene described below."""
 
 # Used in place of "task" when more than one reference photo is attached.
 task_multi = """
 The attached reference photos all show the same real {item} from a jewelry retailer's inventory. \
 The FIRST photo is the primary reference: match its viewing angle and orientation. \
 The other photos show the same {item} from other angles; use them only to understand its details. \
-Produce a new studio-quality product photograph of THIS EXACT {item} in the scene described below."""
+Produce a new studio-quality product image of THIS EXACT {item} in the scene described below."""
 
 rules = [
   "Reproduce the {item} exactly as it appears in the reference: the same design, silhouette and proportions; the same metal colour and finish; the same number, shape, cut, colour, size and arrangement of stones; the same settings and prongs; the same engravings, patterns, textures and links.",
@@ -33,8 +33,21 @@ rules = [
   "Show the whole {item}, with exactly the same number of pieces as in the reference. Do not crop or hide any part of it, and do not duplicate it.",
   "Change only the environment: the background, surface, props, lighting and shadows. Highlights and reflections on the metal and stones may adapt naturally to the new lighting, but no shape may change.",
   "Do not carry over anything else from the reference photo: not its background, hands, stands, price tags, labels, dust or clutter.",
-  "The result must look like a real photograph taken by a professional, not a 3D render or an illustration. Keep the {item} in sharp focus.",
 ]
+
+# The last rule depends on the style's "look" setting.
+# look = "photo" (the default): the result should pass for a real photograph.
+finish_photo = "The result must look like a real photograph taken by a professional, not a 3D render or an illustration. Keep the {item} in sharp focus."
+
+# look = "render": the flawless computer-rendered catalogue look.
+finish_render = """
+The result must look like a flawless high-end 3D CAD jewelry render, the kind luxury jewellers use in \
+their catalogues, not a casual photograph: perfectly smooth, mirror-polished metal with soft, broad \
+gradient reflections from large studio light panels, crisp clean edges, and bright, clear stones with \
+sharp, evenly lit facets. No dust, scratches, fingerprints, grain, lens blur or depth-of-field blur; \
+the whole {item} is in sharp focus. This look applies to the surface finish and the lighting only. \
+The design of the {item} must still match the reference exactly: do not regularise, simplify or \
+idealise its shape, proportions, stone count or settings."""
 
 avoid = [
   "people, hands or other body parts",

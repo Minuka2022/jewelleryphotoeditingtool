@@ -29,7 +29,7 @@ export function MenuBar() {
   const menus: Record<string, (MenuItem | 'divider')[]> = {
     File: [
       { label: 'Open Photos...', shortcut: 'Ctrl+O', run: studio.openPhotos },
-      { label: 'Import Style...', run: () => studio.setDialog('import-style') },
+      { label: 'Import Style...', run: () => studio.openStyleDialog() },
       { label: 'Export Approved...', shortcut: 'Ctrl+Shift+E', run: studio.exportApproved },
       'divider',
       { label: 'Settings...', run: () => studio.setDialog('settings') },

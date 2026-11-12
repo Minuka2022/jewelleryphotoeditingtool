@@ -39,6 +39,10 @@ pub struct GlobalPrompt {
     /// Used instead of `task` when several reference photos are attached.
     pub task_multi: String,
     pub rules: Vec<String>,
+    /// The final rule for styles whose look is [`Look::Photo`].
+    pub finish_photo: String,
+    /// The final rule for styles whose look is [`Look::Render`].
+    pub finish_render: String,
     #[serde(default)]
     pub avoid: Vec<String>,
 }
@@ -62,6 +66,16 @@ pub enum SceneTone {
     Dark,
 }
 
+/// Whether a style's results should pass for a photograph or have the
+/// flawless look of a 3D CAD render.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Look {
+    #[default]
+    Photo,
+    Render,
+}
+
 /// Layer 3: one output style. It describes the scene and nothing else.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +87,8 @@ pub struct StyleTemplate {
     #[serde(default)]
     pub description: String,
     pub tone: SceneTone,
+    #[serde(default)]
+    pub look: Look,
     /// Category ids this style may be used for. Empty means every category.
     #[serde(default)]
     pub categories: Vec<String>,
@@ -99,6 +115,7 @@ pub struct NewStyle {
     /// The scene. `{item}` marks where the jewelry goes; it is added when missing.
     pub prompt: String,
     pub tone: SceneTone,
+    pub look: Look,
     /// Category ids the style is for. Empty means every category.
     pub categories: Vec<String>,
     /// Example picture of the look, copied into the library as a thumbnail.
@@ -130,18 +147,25 @@ pub enum LibraryError {
 
 impl Library {
     /// Loads and validates `master.toml`, `pricing.toml` and `styles/*.toml`
-    /// from `dir`. Any invalid file is an error.
+    /// from `dir`. Any invalid file is an error, and so is having no styles.
     pub fn load(dir: &Path) -> Result<Self, LibraryError> {
         let (library, problems) = Self::load_lenient(dir)?;
-        match problems.into_iter().next() {
-            Some(problem) => Err(problem),
-            None => Ok(library),
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(problem);
         }
+        if library.styles.is_empty() {
+            return Err(LibraryError::Invalid {
+                path: dir.join("styles"),
+                message: "no style files found".into(),
+            });
+        }
+        Ok(library)
     }
 
     /// Like [`Library::load`], but an invalid style file is left out and
     /// reported instead of failing the whole library, so one bad style cannot
-    /// stop the app from starting.
+    /// stop the app from starting. The app's user may also have deleted every
+    /// style, so an empty list is accepted here.
     pub fn load_lenient(dir: &Path) -> Result<(Self, Vec<LibraryError>), LibraryError> {
         let master_path = dir.join("master.toml");
         let master: MasterPrompts = read_toml(&master_path)?;
@@ -177,15 +201,6 @@ impl Library {
                 Err(problem) => problems.push(problem),
             }
         }
-        if styles.is_empty() {
-            return Err(problems
-                .into_iter()
-                .next()
-                .unwrap_or(LibraryError::Invalid {
-                    path: styles_dir,
-                    message: "no style files found".into(),
-                }));
-        }
         drop(category_ids);
 
         let library = Self {
@@ -211,84 +226,121 @@ impl Library {
         dir: &Path,
         new: NewStyle,
     ) -> Result<StyleTemplate, LibraryError> {
-        let reject = |message: &str| LibraryError::Rejected(message.to_owned());
-
         let name = new.name.trim();
         let id = slug(name);
         if id.is_empty() {
-            return Err(reject(
+            return Err(rejected(
                 "Give the style a name that contains letters or digits.",
             ));
         }
-        let styles_dir = dir.join("styles");
-        let style_path = styles_dir.join(format!("{id}.toml"));
+        let style_path = dir.join("styles").join(format!("{id}.toml"));
         if self.style(&id).is_some() || style_path.exists() {
-            return Err(LibraryError::Rejected(format!(
+            return Err(rejected(&format!(
                 "A style named \"{name}\" already exists. Choose another name."
             )));
         }
 
-        let scene = new.prompt.trim();
-        if scene.is_empty() {
-            return Err(reject("Describe the scene in the prompt."));
-        }
-        let prompt = if scene.contains(ITEM_PLACEHOLDER) {
-            scene.to_owned()
-        } else {
-            format!("Place the {ITEM_PLACEHOLDER} in this scene. {scene}")
-        };
-
         let mut style = StyleTemplate {
-            id: id.clone(),
+            id,
             name: name.to_owned(),
             version: 1,
             description: new.description.trim().to_owned(),
             tone: new.tone,
+            look: new.look,
             categories: new.categories,
-            prompt,
+            prompt: scene_prompt(&new.prompt)?,
             avoid: Vec::new(),
             image: None,
         };
-        let category_ids: BTreeSet<&str> = self
-            .master
-            .categories
-            .iter()
-            .map(|c| c.id.as_str())
-            .collect();
-        validate_style(&style, Some(&id), &category_ids).map_err(|message| {
-            LibraryError::Rejected(format!("This style cannot be saved: {message}"))
-        })?;
-
-        let write_error = |path: &Path| {
-            let path = path.to_path_buf();
-            move |source| LibraryError::Io { path, source }
-        };
-        fs::create_dir_all(&styles_dir).map_err(write_error(&styles_dir))?;
-        if let Some(source) = &new.image {
-            let thumbnail = prepare_reference(source, &THUMBNAIL)
-                .map_err(|error| LibraryError::Rejected(error.to_string()))?;
-            let file_name = format!("{id}.jpg");
-            let image_path = styles_dir.join(&file_name);
-            fs::write(&image_path, thumbnail.bytes).map_err(write_error(&image_path))?;
-            style.image = Some(file_name);
-        }
-        let text = toml::to_string_pretty(&style).map_err(|error| LibraryError::Parse {
-            path: style_path.clone(),
-            message: error.to_string(),
-        })?;
-        fs::write(&style_path, text).map_err(write_error(&style_path))?;
+        self.save_style(dir, &mut style, new.image.as_deref())?;
 
         self.styles.push(style.clone());
         self.styles.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(style)
     }
 
+    /// Replaces an existing style's details, keeping its id. The version goes
+    /// up when the prompt or the look changes, because those change what is
+    /// generated. The example picture is kept unless `changes.image` names a
+    /// new one.
+    pub fn update_style(
+        &mut self,
+        dir: &Path,
+        id: &str,
+        changes: NewStyle,
+    ) -> Result<StyleTemplate, LibraryError> {
+        let Some(index) = self.styles.iter().position(|style| style.id == id) else {
+            return Err(rejected(&format!("There is no style \"{id}\".")));
+        };
+        let current = &self.styles[index];
+        let name = changes.name.trim();
+        if name.is_empty() {
+            return Err(rejected("Give the style a name."));
+        }
+        let prompt = scene_prompt(&changes.prompt)?;
+        let changes_results = prompt != current.prompt || changes.look != current.look;
+
+        let mut style = StyleTemplate {
+            id: current.id.clone(),
+            name: name.to_owned(),
+            version: current.version + u32::from(changes_results),
+            description: changes.description.trim().to_owned(),
+            tone: changes.tone,
+            look: changes.look,
+            categories: changes.categories,
+            prompt,
+            avoid: current.avoid.clone(),
+            image: current.image.clone(),
+        };
+        self.save_style(dir, &mut style, changes.image.as_deref())?;
+
+        self.styles[index] = style.clone();
+        Ok(style)
+    }
+
+    /// Validates `style` and writes it to `dir/styles/`, along with its
+    /// example picture if a new one is given.
+    fn save_style(
+        &self,
+        dir: &Path,
+        style: &mut StyleTemplate,
+        picture: Option<&Path>,
+    ) -> Result<(), LibraryError> {
+        let category_ids: BTreeSet<&str> = self
+            .master
+            .categories
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        validate_style(style, Some(style.id.as_str()), &category_ids)
+            .map_err(|message| rejected(&format!("This style cannot be saved: {message}")))?;
+
+        let write_error = |path: &Path| {
+            let path = path.to_path_buf();
+            move |source| LibraryError::Io { path, source }
+        };
+        let styles_dir = dir.join("styles");
+        fs::create_dir_all(&styles_dir).map_err(write_error(&styles_dir))?;
+        if let Some(source) = picture {
+            let thumbnail = prepare_reference(source, &THUMBNAIL)
+                .map_err(|error| rejected(&error.to_string()))?;
+            let file_name = format!("{}.jpg", style.id);
+            let image_path = styles_dir.join(&file_name);
+            fs::write(&image_path, thumbnail.bytes).map_err(write_error(&image_path))?;
+            style.image = Some(file_name);
+        }
+        let style_path = styles_dir.join(format!("{}.toml", style.id));
+        let text = toml::to_string_pretty(style).map_err(|error| LibraryError::Parse {
+            path: style_path.clone(),
+            message: error.to_string(),
+        })?;
+        fs::write(&style_path, text).map_err(write_error(&style_path))
+    }
+
     /// Deletes a style's files from `dir/styles/` and drops it from this library.
     pub fn remove_style(&mut self, dir: &Path, id: &str) -> Result<(), LibraryError> {
         let Some(index) = self.styles.iter().position(|style| style.id == id) else {
-            return Err(LibraryError::Rejected(format!(
-                "There is no style \"{id}\"."
-            )));
+            return Err(rejected(&format!("There is no style \"{id}\".")));
         };
         let styles_dir = dir.join("styles");
         let style_path = styles_dir.join(format!("{id}.toml"));
@@ -303,6 +355,23 @@ impl Library {
         self.styles.remove(index);
         Ok(())
     }
+}
+
+fn rejected(message: &str) -> LibraryError {
+    LibraryError::Rejected(message.to_owned())
+}
+
+/// A style's scene text, with `{item}` added when the author left it out.
+fn scene_prompt(text: &str) -> Result<String, LibraryError> {
+    let scene = text.trim();
+    if scene.is_empty() {
+        return Err(rejected("Describe the scene in the prompt."));
+    }
+    Ok(if scene.contains(ITEM_PLACEHOLDER) {
+        scene.to_owned()
+    } else {
+        format!("Place the {ITEM_PLACEHOLDER} in this scene. {scene}")
+    })
 }
 
 /// Size and quality of the example picture kept with an imported style.
@@ -355,8 +424,13 @@ fn validate_master(master: &MasterPrompts) -> Result<(), String> {
             return Err(format!("[global] {name} must mention {{item}}"));
         }
     }
+    let finishes = [&global.finish_photo, &global.finish_render];
+    if finishes.iter().any(|text| text.trim().is_empty()) {
+        return Err("[global] finish_photo and finish_render must not be empty".into());
+    }
     let global_texts = [&global.role, &global.task, &global.task_multi]
         .into_iter()
+        .chain(finishes)
         .chain(&global.rules);
     for text in global_texts {
         check_placeholders(text).map_err(|message| format!("[global] {message}"))?;
@@ -464,6 +538,7 @@ pub(crate) mod tests {
             version: 1,
             description: String::new(),
             tone: SceneTone::Neutral,
+            look: Look::Photo,
             categories: Vec::new(),
             prompt: prompt.into(),
             avoid: Vec::new(),
@@ -495,9 +570,96 @@ pub(crate) mod tests {
             description: "A test look".into(),
             prompt: prompt.into(),
             tone: SceneTone::Bright,
+            look: Look::Render,
             categories: vec!["ring".into()],
             image: None,
         }
+    }
+
+    #[test]
+    fn editing_a_style_keeps_its_id_and_bumps_the_version_only_when_results_change() {
+        let (dir, mut library) = writable_library("update");
+        let picture = dir.join("look.png");
+        image::RgbImage::from_pixel(300, 200, image::Rgb([240, 200, 210]))
+            .save(&picture)
+            .unwrap();
+        let mut original = new_style("Rose Petals", "Place the {item} on rose petals.");
+        original.image = Some(picture);
+        library.import_style(&dir, original).unwrap();
+
+        // A new name and categories do not change what is generated.
+        let renamed = NewStyle {
+            categories: vec!["ring".into(), "earrings".into()],
+            ..new_style("Romantic Petals", "Place the {item} on rose petals.")
+        };
+        let style = library.update_style(&dir, "rose-petals", renamed).unwrap();
+        assert_eq!((style.id.as_str(), style.version), ("rose-petals", 1));
+        assert_eq!(style.name, "Romantic Petals");
+        assert!(style.supports("earrings"));
+        assert_eq!(style.image.as_deref(), Some("rose-petals.jpg"));
+
+        // A new prompt does, and so does a new look.
+        let reworded = new_style("Romantic Petals", "ivory silk and rose petals");
+        let style = library.update_style(&dir, "rose-petals", reworded).unwrap();
+        assert_eq!(style.version, 2);
+        assert_eq!(
+            style.prompt,
+            "Place the {item} in this scene. ivory silk and rose petals"
+        );
+        let photographic = NewStyle {
+            look: Look::Photo,
+            ..new_style("Romantic Petals", "ivory silk and rose petals")
+        };
+        let style = library
+            .update_style(&dir, "rose-petals", photographic)
+            .unwrap();
+        assert_eq!((style.version, style.look), (3, Look::Photo));
+
+        // The saved file matches, and bad edits change nothing.
+        let saved = Library::load(&dir).unwrap();
+        let saved = saved.style("rose-petals").unwrap();
+        assert_eq!((saved.version, saved.look), (3, Look::Photo));
+        assert_eq!(saved.image.as_deref(), Some("rose-petals.jpg"));
+
+        let bad = [
+            (
+                "rose-petals",
+                new_style("Romantic Petals", "worn on a hand"),
+            ),
+            ("rose-petals", new_style("  ", "Place the {item} on silk.")),
+            (
+                "no-such-style",
+                new_style("Other", "Place the {item} on silk."),
+            ),
+        ];
+        for (id, changes) in bad {
+            let error = library.update_style(&dir, id, changes).unwrap_err();
+            assert!(matches!(error, LibraryError::Rejected(_)), "{error}");
+        }
+        assert_eq!(library.style("rose-petals").unwrap().version, 3);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn styles_are_photographic_unless_they_say_otherwise() {
+        assert!(shipped_library()
+            .styles
+            .iter()
+            .all(|style| style.look == Look::Photo));
+
+        // The render look survives saving and loading.
+        let (dir, mut library) = writable_library("look");
+        let style = new_style("Catalogue Render", "Place the {item} on pure white.");
+        assert_eq!(
+            library.import_style(&dir, style).unwrap().look,
+            Look::Render
+        );
+        let reloaded = Library::load(&dir).unwrap();
+        assert_eq!(
+            reloaded.style("catalogue-render").unwrap().look,
+            Look::Render
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

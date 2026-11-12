@@ -63,6 +63,11 @@ function useController() {
   // Per photo: the generated image being viewed, or null for the reference.
   const [viewing, setViewing] = useState<Record<string, string | null>>({});
   const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
+  // Which styles the panel lists: "auto" follows the open photo's type,
+  // "all" lists everything, anything else is a jewelry type id.
+  const [styleFilter, setStyleFilter] = useState('auto');
+  // The style being edited in the style window, or null when adding a new one.
+  const [editingStyle, setEditingStyle] = useState<StyleInfo | null>(null);
   const [note, setNote] = useState('');
   const [lastCategory, setLastCategory] = useState('jewelry');
 
@@ -356,19 +361,32 @@ function useController() {
     }
   }, [items, notify, fail]);
 
-  const importStyle = useCallback(
+  /** Opens the style window: empty to add a style, or filled in to edit one. */
+  const openStyleDialog = useCallback((style?: StyleInfo) => {
+    setEditingStyle(style ?? null);
+    setDialog('import-style');
+  }, []);
+
+  /** Saves the style window. Returns a message if the style was refused. */
+  const saveStyle = useCallback(
     async (style: ImportStyle): Promise<string | null> => {
       try {
-        const result = await api.importStyle(style);
-        setLibrary(result.library);
-        setSelectedStyles((list) => [...list, result.styleId]);
-        notify('info', `"${style.name.trim()}" was added to your styles.`);
+        if (editingStyle) {
+          const result = await api.updateStyle(editingStyle.id, style);
+          setLibrary(result.library);
+          notify('info', `"${style.name.trim()}" was updated.`);
+        } else {
+          const result = await api.importStyle(style);
+          setLibrary(result.library);
+          setSelectedStyles((list) => [...list, result.styleId]);
+          notify('info', `"${style.name.trim()}" was added to your styles.`);
+        }
         return null;
       } catch (error) {
         return errorText(error);
       }
     },
-    [notify],
+    [editingStyle, notify],
   );
 
   const removeStyle = useCallback(
@@ -462,7 +480,11 @@ function useController() {
     changeSettings,
     generate,
     exportApproved,
-    importStyle,
+    styleFilter,
+    setStyleFilter,
+    editingStyle,
+    openStyleDialog,
+    saveStyle,
     removeStyle,
   };
 }
