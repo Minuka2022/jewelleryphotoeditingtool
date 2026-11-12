@@ -13,6 +13,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { mockApi } from './mock';
 import type {
   AddItemsResult,
+  AddReferencesResult,
   Crop,
   ExportEstimate,
   ExportOptions,
@@ -47,6 +48,14 @@ export interface Api {
   addItems(paths: string[], category: string): Promise<AddItemsResult>;
   updateItem(id: string, patch: { name?: string; category?: string }): Promise<ItemInfo>;
   removeItem(id: string): Promise<void>;
+  /** More photos of the same piece. */
+  addReferences(itemId: string, paths: string[]): Promise<AddReferencesResult>;
+  removeReference(itemId: string, referenceId: string): Promise<ItemInfo>;
+  makePrimaryReference(itemId: string, referenceId: string): Promise<ItemInfo>;
+  /** Blank text removes the notes. */
+  setDesignNotes(itemId: string, notes: string | null): Promise<ItemInfo>;
+  /** Has the AI study every photo of the piece and write its design notes. */
+  analyzeItem(itemId: string): Promise<ItemInfo>;
   setOutputStatus(itemId: string, outputId: string, status: OutputStatus): Promise<ItemInfo>;
   removeOutput(itemId: string, outputId: string): Promise<ItemInfo>;
   /** null removes the crop. */
@@ -90,6 +99,13 @@ function operations(call: Call) {
     updateItem: (id: string, patch: { name?: string; category?: string }) =>
       call<ItemInfo>('update_item', { id, ...patch }),
     removeItem: (id: string) => call<void>('remove_item', { id }),
+    addReferences: (itemId: string, paths: string[]) => call<AddReferencesResult>('add_references', { itemId, paths }),
+    removeReference: (itemId: string, referenceId: string) =>
+      call<ItemInfo>('remove_reference', { itemId, referenceId }),
+    makePrimaryReference: (itemId: string, referenceId: string) =>
+      call<ItemInfo>('make_primary_reference', { itemId, referenceId }),
+    setDesignNotes: (itemId: string, notes: string | null) => call<ItemInfo>('set_design_notes', { itemId, notes }),
+    analyzeItem: (itemId: string) => call<ItemInfo>('analyze_item', { itemId }),
     setOutputStatus: (itemId: string, outputId: string, status: OutputStatus) =>
       call<ItemInfo>('set_output_status', { itemId, outputId, status }),
     removeOutput: (itemId: string, outputId: string) => call<ItemInfo>('remove_output', { itemId, outputId }),

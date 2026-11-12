@@ -13,17 +13,55 @@ use studio_core::reference::{prepare_reference, PrepareOptions};
 
 const REFERENCE_FILE: &str = "reference.jpg";
 
+/// The most reference photos one piece can have. Google's image models study
+/// up to 6 (Pro) or 10 (Flash) photos of an object in detail.
+pub const MAX_REFERENCES: usize = 6;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemRecord {
     pub id: String,
     pub name: String,
     pub category: String,
+    /// Size of the primary reference photo.
     pub width: u32,
     pub height: u32,
     pub created_at: String,
     #[serde(default)]
     pub outputs: Vec<OutputRecord>,
+    /// Photos of this piece. The first is the primary one: results match its
+    /// viewing angle; the others help the AI understand the design.
+    #[serde(default)]
+    pub references: Vec<ReferenceRecord>,
+    /// What the piece looks like in words, written by the AI after studying
+    /// every reference photo, and editable. Sent with every generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceRecord {
+    pub id: String,
+    /// File name inside the item's folder.
+    pub file: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ItemRecord {
+    /// Items saved before several photos were possible had exactly one.
+    fn upgrade(mut self) -> Self {
+        if self.references.is_empty() {
+            self.references.push(ReferenceRecord {
+                id: "primary".into(),
+                file: REFERENCE_FILE.into(),
+                width: self.width,
+                height: self.height,
+            });
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,7 +112,8 @@ impl Store {
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| fs::read_to_string(entry.path().join("item.json")).ok())
             // A damaged item file hides that one item instead of blocking the app.
-            .filter_map(|text| serde_json::from_str(&text).ok())
+            .filter_map(|text| serde_json::from_str::<ItemRecord>(&text).ok())
+            .map(ItemRecord::upgrade)
             .collect();
         items.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
         Ok(Self { dir, items })
@@ -88,8 +127,108 @@ impl Store {
         self.index(id).map(|index| &self.items[index])
     }
 
+    /// Where a reference photo of an item is stored.
+    pub fn reference_file(&self, item_id: &str, file: &str) -> PathBuf {
+        self.dir.join(item_id).join(file)
+    }
+
+    /// The primary reference photo of an item.
     pub fn reference_path(&self, item_id: &str) -> PathBuf {
-        self.dir.join(item_id).join(REFERENCE_FILE)
+        let file = self
+            .item(item_id)
+            .ok()
+            .and_then(|item| item.references.first())
+            .map_or(REFERENCE_FILE, |reference| reference.file.as_str());
+        self.reference_file(item_id, file)
+    }
+
+    /// Adds more photos of the same piece. Each photo that cannot be read is
+    /// reported; the others are still added.
+    pub fn add_references(
+        &mut self,
+        item_id: &str,
+        sources: &[PathBuf],
+    ) -> Result<Vec<String>, String> {
+        let index = self.index(item_id)?;
+        let mut errors = Vec::new();
+        for source in sources {
+            if self.items[index].references.len() >= MAX_REFERENCES {
+                errors.push(format!(
+                    "A piece can have at most {MAX_REFERENCES} photos. Remove one to add another."
+                ));
+                break;
+            }
+            let reference = match prepare_reference(source, &PrepareOptions::default()) {
+                Ok(reference) => reference,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    continue;
+                }
+            };
+            let id = new_id("f");
+            let file = format!("reference-{id}.jpg");
+            let path = self.reference_file(item_id, &file);
+            fs::write(&path, &reference.bytes).map_err(|e| cannot("write", &path, e))?;
+            self.items[index].references.push(ReferenceRecord {
+                id,
+                file,
+                width: reference.width,
+                height: reference.height,
+            });
+        }
+        self.save(&self.items[index])?;
+        Ok(errors)
+    }
+
+    /// Deletes one reference photo. The last one cannot be removed.
+    pub fn remove_reference(&mut self, item_id: &str, reference_id: &str) -> Result<(), String> {
+        let index = self.index(item_id)?;
+        let references = &self.items[index].references;
+        if references.len() <= 1 {
+            return Err("A piece needs at least one photo.".into());
+        }
+        let position = references
+            .iter()
+            .position(|reference| reference.id == reference_id)
+            .ok_or("That photo is no longer part of this piece.")?;
+        let removed = self.items[index].references.remove(position);
+        let _ = fs::remove_file(self.reference_file(item_id, &removed.file));
+        self.sync_primary_size(index);
+        self.save(&self.items[index])
+    }
+
+    /// Makes a reference photo the primary one, whose angle results follow.
+    pub fn make_primary_reference(
+        &mut self,
+        item_id: &str,
+        reference_id: &str,
+    ) -> Result<(), String> {
+        let index = self.index(item_id)?;
+        let references = &mut self.items[index].references;
+        let position = references
+            .iter()
+            .position(|reference| reference.id == reference_id)
+            .ok_or("That photo is no longer part of this piece.")?;
+        let chosen = references.remove(position);
+        references.insert(0, chosen);
+        self.sync_primary_size(index);
+        self.save(&self.items[index])
+    }
+
+    pub fn set_design_notes(&mut self, item_id: &str, notes: Option<String>) -> Result<(), String> {
+        let index = self.index(item_id)?;
+        self.items[index].design_notes = notes
+            .map(|notes| notes.trim().to_owned())
+            .filter(|notes| !notes.is_empty());
+        self.save(&self.items[index])
+    }
+
+    fn sync_primary_size(&mut self, index: usize) {
+        let item = &mut self.items[index];
+        if let Some(primary) = item.references.first() {
+            item.width = primary.width;
+            item.height = primary.height;
+        }
     }
 
     pub fn output_path(&self, item_id: &str, file: &str) -> PathBuf {
@@ -119,6 +258,13 @@ impl Store {
             height: reference.height,
             created_at: now(),
             outputs: Vec::new(),
+            references: vec![ReferenceRecord {
+                id: "primary".into(),
+                file: REFERENCE_FILE.into(),
+                width: reference.width,
+                height: reference.height,
+            }],
+            design_notes: None,
         };
         self.save(&item)?;
         self.items.push(item);

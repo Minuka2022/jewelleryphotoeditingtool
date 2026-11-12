@@ -12,9 +12,10 @@ use studio_core::export::{self, Crop, ExportOptions};
 use studio_core::gemini::{GenerateRequest, GeneratedImage};
 use studio_core::guardrails;
 use studio_core::library::{Library, Look, NewStyle, SceneTone, StyleTemplate};
-use studio_core::prompt::{build_prompt, PromptRequest};
+use studio_core::prompt::{analysis_prompt, build_prompt, PromptRequest};
 use studio_core::reference::ReferenceImage;
 
+pub use crate::store::MAX_REFERENCES;
 use crate::store::{new_id, now, ItemRecord, OutputRecord, OutputStatus, Store};
 
 /// Files owned by the app and rewritten on every start, so that updates can
@@ -145,9 +146,30 @@ pub struct ItemInfo {
     pub width: u32,
     pub height: u32,
     pub created_at: String,
-    /// Full path of the prepared reference photo.
+    /// Full path of the primary reference photo.
     pub reference: String,
+    /// Every photo of this piece, the primary one first.
+    pub references: Vec<ReferenceInfo>,
+    /// What the AI found when it studied the photos, or the user's corrections.
+    pub design_notes: Option<String>,
     pub outputs: Vec<OutputInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceInfo {
+    pub id: String,
+    /// Full path of the photo.
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AddReferencesResult {
+    pub item: ItemInfo,
+    /// One message per photo that could not be added.
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -450,6 +472,17 @@ impl Studio {
             height: item.height,
             created_at: item.created_at.clone(),
             reference: display(&self.store.reference_path(&item.id)),
+            references: item
+                .references
+                .iter()
+                .map(|reference| ReferenceInfo {
+                    id: reference.id.clone(),
+                    path: display(&self.store.reference_file(&item.id, &reference.file)),
+                    width: reference.width,
+                    height: reference.height,
+                })
+                .collect(),
+            design_notes: item.design_notes.clone(),
             outputs: item
                 .outputs
                 .iter()
@@ -511,6 +544,83 @@ impl Studio {
 
     pub fn remove_item(&mut self, id: &str) -> Result<(), String> {
         self.store.remove_item(id)
+    }
+
+    /// Adds more photos of the same piece, e.g. other angles.
+    pub fn add_references(
+        &mut self,
+        item_id: &str,
+        paths: &[PathBuf],
+    ) -> Result<AddReferencesResult, String> {
+        let errors = self.store.add_references(item_id, paths)?;
+        Ok(AddReferencesResult {
+            item: self.item_info(item_id)?,
+            errors,
+        })
+    }
+
+    pub fn remove_reference(
+        &mut self,
+        item_id: &str,
+        reference_id: &str,
+    ) -> Result<ItemInfo, String> {
+        self.store.remove_reference(item_id, reference_id)?;
+        self.item_info(item_id)
+    }
+
+    pub fn make_primary_reference(
+        &mut self,
+        item_id: &str,
+        reference_id: &str,
+    ) -> Result<ItemInfo, String> {
+        self.store.make_primary_reference(item_id, reference_id)?;
+        self.item_info(item_id)
+    }
+
+    /// Saves the design notes; blank text removes them.
+    pub fn set_design_notes(
+        &mut self,
+        item_id: &str,
+        notes: Option<String>,
+    ) -> Result<ItemInfo, String> {
+        self.store.set_design_notes(item_id, notes)?;
+        self.item_info(item_id)
+    }
+
+    /// Every reference photo of an item, ready to send, the primary one first.
+    fn reference_images(&self, item: &ItemRecord) -> Result<Vec<Arc<ReferenceImage>>, String> {
+        item.references
+            .iter()
+            .map(|reference| {
+                let path = self.store.reference_file(&item.id, &reference.file);
+                let bytes = fs::read(&path)
+                    .map_err(|e| format!("Cannot read a reference photo of this piece: {e}"))?;
+                Ok(Arc::new(ReferenceImage {
+                    mime_type: "image/jpeg".into(),
+                    bytes,
+                    width: reference.width,
+                    height: reference.height,
+                }))
+            })
+            .collect()
+    }
+
+    /// The request that has the AI study every photo of a piece and describe
+    /// its design. Its answer is saved with [`Studio::set_design_notes`].
+    pub fn analysis_request(&self, item_id: &str) -> Result<GenerateRequest, String> {
+        let item = self.store.item(item_id)?;
+        let category = self
+            .library
+            .category(&item.category)
+            .ok_or("This photo's category no longer exists. Choose another one.")?;
+        let references = self.reference_images(item)?;
+        Ok(GenerateRequest {
+            model: self.library.pricing.analysis_model.clone(),
+            prompt: analysis_prompt(&self.library.master, category, references.len()),
+            references,
+            aspect_ratio: None,
+            image_size: None,
+        })
     }
 
     pub fn set_output_status(
@@ -581,15 +691,8 @@ impl Studio {
             ));
         }
 
-        let reference_path = self.store.reference_path(&item.id);
-        let bytes = fs::read(&reference_path)
-            .map_err(|e| format!("Cannot read this photo's reference image: {e}"))?;
-        let reference = Arc::new(ReferenceImage {
-            mime_type: "image/jpeg".into(),
-            bytes,
-            width: item.width,
-            height: item.height,
-        });
+        // Every photo of the piece goes with every request.
+        let references = self.reference_images(item)?;
 
         let note = args
             .note
@@ -607,8 +710,9 @@ impl Studio {
                 master: &self.library.master,
                 category,
                 style,
-                reference_count: 1,
+                reference_count: references.len(),
                 user_note: note,
+                design_notes: item.design_notes.as_deref(),
             })
             .map_err(|error| match error {
                 studio_core::prompt::PromptError::StyleNotForCategory { .. } => format!(
@@ -626,7 +730,7 @@ impl Studio {
                     request: GenerateRequest {
                         model: settings.model.clone(),
                         prompt: prompt.text.clone(),
-                        references: vec![reference.clone()],
+                        references: references.clone(),
                         aspect_ratio: settings.aspect_ratio.clone(),
                         image_size: Some(settings.image_size.clone()),
                     },
@@ -894,6 +998,68 @@ pub(crate) mod tests {
         assert!(Path::new(&item.reference).is_file());
         assert_eq!(reopened.settings().variants, 3);
         assert_eq!(reopened.settings().aspect_ratio.as_deref(), Some("1:1"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_piece_can_have_several_photos_with_one_primary() {
+        let (dir, mut studio, item_id) = studio_with_ring("references");
+        let extra: Vec<PathBuf> = (1..=7)
+            .map(|n| photo(&dir, &format!("angle-{n}.png")))
+            .collect();
+
+        // At most six photos per piece; the rest are reported.
+        let added = studio.add_references(&item_id, &extra).unwrap();
+        assert_eq!(added.item.references.len(), MAX_REFERENCES);
+        assert_eq!(added.errors.len(), 1, "{:?}", added.errors);
+        assert!(added
+            .item
+            .references
+            .iter()
+            .all(|r| Path::new(&r.path).is_file()));
+
+        // Any photo can become the primary one; the primary is what the
+        // canvas shows as the reference.
+        let third = added.item.references[2].clone();
+        let item = studio.make_primary_reference(&item_id, &third.id).unwrap();
+        assert_eq!(item.references[0].id, third.id);
+        assert_eq!(item.reference, third.path);
+
+        // Removing photos works down to the last one, which must stay.
+        for reference in &item.references[1..] {
+            studio.remove_reference(&item_id, &reference.id).unwrap();
+            assert!(
+                !Path::new(&reference.path).exists(),
+                "{} was kept",
+                reference.path
+            );
+        }
+        assert!(studio
+            .remove_reference(&item_id, &item.references[0].id)
+            .is_err());
+        assert_eq!(studio.item_info(&item_id).unwrap().references.len(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pieces_saved_before_several_photos_existed_still_open() {
+        let (dir, studio, item_id) = studio_with_ring("upgrade");
+        drop(studio);
+        // Rewrite the item file the way version 0.4 saved it.
+        let file = dir.join("data/items").join(&item_id).join("item.json");
+        let mut json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("references");
+        fs::write(&file, json.to_string()).unwrap();
+
+        let studio = Studio::open(dir.join("data")).unwrap();
+        let item = studio.item_info(&item_id).unwrap();
+        assert_eq!(item.references.len(), 1);
+        assert!(item.references[0].path.ends_with("reference.jpg"));
+        assert_eq!(
+            studio.analysis_request(&item_id).unwrap().references.len(),
+            1
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

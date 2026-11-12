@@ -6,6 +6,9 @@
 checked_on = "2026-11-12"
 default_model = "gemini-nano-banana-2.1"
 default_size = "2K"
+# Text model that studies the reference photos and writes the design notes.
+# A text answer costs a small fraction of one generated image.
+analysis_model = "gemini-flash-latest"
 
 [[model]]
 id = "gemini-nano-banana-2.1"

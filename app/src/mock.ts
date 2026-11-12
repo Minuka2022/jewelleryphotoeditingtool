@@ -105,16 +105,25 @@ const croppedPicture = (original: string, crop: Crop) => {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(cut);
 };
 
-const item = (name: string, category: string): ItemInfo => ({
-  id: id('i'),
-  name,
-  category,
-  width: 1200,
-  height: 900,
-  createdAt: now(),
-  reference: picture('#96897a', `${name} (reference)`),
-  outputs: [],
-});
+const item = (name: string, category: string): ItemInfo => {
+  const reference = picture('#96897a', `${name} (reference)`);
+  return {
+    id: id('i'),
+    name,
+    category,
+    width: 1200,
+    height: 900,
+    createdAt: now(),
+    reference,
+    references: [{ id: 'primary', path: reference, width: 1200, height: 900 }],
+    designNotes: null,
+    outputs: [],
+  };
+};
+
+const syncPrimary = (found: ItemInfo) => {
+  found.reference = found.references[0].path;
+};
 
 const items: ItemInfo[] = [];
 // "?demo" opens the preview with a photo and results already in place.
@@ -151,6 +160,48 @@ export const mockApi: Api = {
   },
   updateItem: async (itemId, patch) => copy(Object.assign(find(itemId), patch)),
   removeItem: async (itemId) => void items.splice(items.indexOf(find(itemId)), 1),
+  addReferences: async (itemId, paths) => {
+    const found = find(itemId);
+    const room = 6 - found.references.length;
+    const tints = ['#8a7d6f', '#7d8a86', '#857a8c', '#8c847a', '#7a828c'];
+    paths.slice(0, room).forEach((path, index) => {
+      const angle = path.replace(/^.*[\\/]/, '');
+      found.references.push({ id: id('f'), path: picture(tints[index % tints.length], `${found.name} (${angle})`), width: 1200, height: 900 });
+    });
+    const errors = paths.length > room ? ['A piece can have at most 6 photos. Remove one to add another.'] : [];
+    return { item: copy(found), errors };
+  },
+  removeReference: async (itemId, referenceId) => {
+    const found = find(itemId);
+    if (found.references.length <= 1) throw 'A piece needs at least one photo.';
+    found.references = found.references.filter((r) => r.id !== referenceId);
+    syncPrimary(found);
+    return copy(found);
+  },
+  makePrimaryReference: async (itemId, referenceId) => {
+    const found = find(itemId);
+    const chosen = found.references.find((r) => r.id === referenceId);
+    if (!chosen) throw 'That photo is no longer part of this piece.';
+    found.references = [chosen, ...found.references.filter((r) => r.id !== referenceId)];
+    syncPrimary(found);
+    return copy(found);
+  },
+  setDesignNotes: async (itemId, notes) => {
+    const found = find(itemId);
+    found.designNotes = notes?.trim() || null;
+    return copy(found);
+  },
+  analyzeItem: async (itemId) => {
+    await wait(900);
+    const found = find(itemId);
+    found.designNotes = [
+      `- Studied ${found.references.length} photo(s) of this ${found.category}.`,
+      '- Yellow gold band, polished, rounded profile.',
+      '- Oval light-blue centre stone in 4 prongs.',
+      '- Halo of 12 small round white stones.',
+    ].join('\n');
+    return copy(found);
+  },
   setOutputStatus: async (itemId, outputId, status) => {
     const found = find(itemId);
     found.outputs = found.outputs.map((o) => (o.id === outputId ? { ...o, status } : o));

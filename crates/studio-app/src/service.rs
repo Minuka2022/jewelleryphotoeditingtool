@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use studio_core::export::{Crop, ExportOptions};
-use studio_core::gemini::GeminiClient;
+use studio_core::gemini::{GeminiClient, ImageDescriber};
 
 use crate::generate::{self, Progress};
 use crate::secrets;
@@ -124,6 +124,28 @@ pub async fn generate(
     lock(studio)?.item_info(&item_id)
 }
 
+/// Has the AI study every reference photo of a piece and saves what it
+/// found as the piece's design notes.
+pub async fn analyze_item(studio: &Shared, item_id: &str) -> Result<ItemInfo, String> {
+    let api_key = secrets::load().ok_or(NO_KEY)?;
+    let client = new_client(api_key)?;
+    analyze_with(studio, item_id, &client).await
+}
+
+/// [`analyze_item`] with any describer, so it can be tested without Google.
+pub async fn analyze_with(
+    studio: &Shared,
+    item_id: &str,
+    describer: &impl ImageDescriber,
+) -> Result<ItemInfo, String> {
+    let request = lock(studio)?.analysis_request(item_id)?;
+    let notes = describer
+        .describe(&request)
+        .await
+        .map_err(|e| explain(e.to_string()))?;
+    lock(studio)?.set_design_notes(item_id, Some(notes))
+}
+
 /// Saves a crop (or removes it with `None`) and makes the copy shown on screen.
 pub async fn set_output_crop(
     studio: &Shared,
@@ -226,6 +248,18 @@ struct OutputArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ReferenceArgs {
+    item_id: String,
+    #[serde(default)]
+    reference_id: String,
+    #[serde(default)]
+    paths: Vec<PathBuf>,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StyleArgs {
     #[serde(default)]
     id: String,
@@ -280,6 +314,23 @@ pub async fn dispatch(
         "update_item" => whole::<ItemArgs>(args).and_then(|a| {
             lock(studio).and_then(|mut s| json(s.update_item(&a.id, a.name, a.category)?))
         }),
+        "add_references" => whole::<ReferenceArgs>(args).and_then(|a| {
+            lock(studio).and_then(|mut s| json(s.add_references(&a.item_id, &a.paths)?))
+        }),
+        "remove_reference" => whole::<ReferenceArgs>(args).and_then(|a| {
+            lock(studio).and_then(|mut s| json(s.remove_reference(&a.item_id, &a.reference_id)?))
+        }),
+        "make_primary_reference" => whole::<ReferenceArgs>(args).and_then(|a| {
+            lock(studio)
+                .and_then(|mut s| json(s.make_primary_reference(&a.item_id, &a.reference_id)?))
+        }),
+        "set_design_notes" => whole::<ReferenceArgs>(args).and_then(|a| {
+            lock(studio).and_then(|mut s| json(s.set_design_notes(&a.item_id, a.notes)?))
+        }),
+        "analyze_item" => match whole::<ReferenceArgs>(args) {
+            Ok(a) => analyze_item(studio, &a.item_id).await.and_then(json),
+            Err(e) => Err(e),
+        },
         "remove_item" => whole::<ItemArgs>(args)
             .and_then(|a| lock(studio).and_then(|mut s| s.remove_item(&a.id)))
             .and_then(json),
@@ -397,8 +448,101 @@ mod tests {
             .block_on(dispatch(&studio, "no_such_command", json!({}), |_| {}))
             .is_none());
 
+        // Several photos of one piece, and its design notes.
+        let more = call(
+            &studio,
+            "add_references",
+            json!({ "itemId": item_id, "paths": [photo(&dir, "side.png"), photo(&dir, "top.png")] }),
+        )
+        .unwrap();
+        let references = more["item"]["references"].as_array().unwrap().clone();
+        assert_eq!(references.len(), 3);
+        let side = references[1]["id"].as_str().unwrap();
+        let primary = call(
+            &studio,
+            "make_primary_reference",
+            json!({ "itemId": item_id, "referenceId": side }),
+        )
+        .unwrap();
+        assert_eq!(primary["references"][0]["id"], side);
+        let fewer = call(
+            &studio,
+            "remove_reference",
+            json!({ "itemId": item_id, "referenceId": side }),
+        )
+        .unwrap();
+        assert_eq!(fewer["references"].as_array().unwrap().len(), 2);
+        let noted = call(
+            &studio,
+            "set_design_notes",
+            json!({ "itemId": item_id, "notes": " Yellow gold. " }),
+        )
+        .unwrap();
+        assert_eq!(noted["designNotes"], "Yellow gold.");
+
         call(&studio, "remove_item", json!({ "id": item_id })).unwrap();
         assert_eq!(call(&studio, "list_items", json!({})).unwrap(), json!([]));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Answers with a fixed description and remembers how many photos it saw.
+    struct FakeDescriber(std::sync::atomic::AtomicUsize);
+
+    impl ImageDescriber for FakeDescriber {
+        async fn describe(
+            &self,
+            request: &studio_core::gemini::GenerateRequest,
+        ) -> Result<String, studio_core::gemini::GenerateError> {
+            self.0.store(
+                request.references.len(),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            assert!(request.prompt.contains("the same ring"));
+            assert!(request.image_size.is_none());
+            Ok("  Oval blue centre stone, 4 prongs; halo of 12 diamonds.  ".into())
+        }
+    }
+
+    #[test]
+    fn studying_the_photos_saves_design_notes_that_reach_every_generation() {
+        let dir = temp_dir("analyze");
+        let studio = Mutex::new(Studio::open(dir.join("data")).unwrap());
+        let item_id = {
+            let mut s = studio.lock().unwrap();
+            let added = s.add_items(&[photo(&dir, "front.png")], "ring").unwrap();
+            let id = added.items[0].id.clone();
+            s.add_references(&id, &[photo(&dir, "side.png"), photo(&dir, "back.png")])
+                .unwrap();
+            id
+        };
+
+        let describer = FakeDescriber(Default::default());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let item = runtime
+            .block_on(analyze_with(&studio, &item_id, &describer))
+            .unwrap();
+        assert_eq!(describer.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(
+            item.design_notes.as_deref(),
+            Some("Oval blue centre stone, 4 prongs; halo of 12 diamonds.")
+        );
+
+        let plan = studio
+            .lock()
+            .unwrap()
+            .plan_generation(&GenerateArgs {
+                item_id: item_id.clone(),
+                style_ids: vec!["studio-white".into()],
+                variants: 1,
+                note: None,
+            })
+            .unwrap();
+        let request = &plan.jobs[0].request;
+        assert_eq!(request.references.len(), 3);
+        assert!(request.prompt.contains("halo of 12 diamonds"));
+        assert!(request
+            .prompt
+            .contains("The FIRST photo is the primary reference"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

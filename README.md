@@ -39,6 +39,14 @@ one appears in the other.
 
 1. **Open photos**: drop them onto the window, or File > Open Photos.
 2. **Set the type** (Ring, Necklace, ...) in the Properties panel.
+   **Add angles** of the same piece there (up to 6 photos, or use
+   File > Open Photos of One Piece). The photo marked MAIN sets the viewing
+   angle of the results; the others help the AI understand the design.
+   Every photo is sent with every generation.
+   **Design notes:** before the first generation the AI studies all the
+   photos and writes down the design (metal, stones, prongs, engravings).
+   The notes are sent with every generation; correct them if anything is
+   wrong, or press "Study again" after changing the photos.
 3. **Tick one or more styles** in the Styles panel.
 4. **Generate**. The button shows how many images and what they will cost.
 5. **Review**: click a result in the filmstrip. Use side by side (2) or the

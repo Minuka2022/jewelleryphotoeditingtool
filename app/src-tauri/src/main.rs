@@ -11,8 +11,8 @@ use studio_app::secrets;
 use studio_app::service::{self, lock, settings_info, ImportedStyle, SettingsInfo, Shared};
 use studio_app::store::OutputStatus;
 use studio_app::studio::{
-    AddItemsResult, ExportEstimate, GenerateArgs, ImportStyle, ItemInfo, LibraryInfo, OutputRef,
-    PromptCheck, Settings, Studio,
+    AddItemsResult, AddReferencesResult, ExportEstimate, GenerateArgs, ImportStyle, ItemInfo,
+    LibraryInfo, OutputRef, PromptCheck, Settings, Studio,
 };
 use studio_core::export::{Crop, ExportOptions};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -73,6 +73,49 @@ fn update_item(
 #[tauri::command]
 fn remove_item(state: State<'_, Shared>, id: String) -> Result<(), String> {
     lock(&state)?.remove_item(&id)
+}
+
+#[tauri::command]
+fn add_references(
+    state: State<'_, Shared>,
+    item_id: String,
+    paths: Vec<String>,
+) -> Result<AddReferencesResult, String> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    lock(&state)?.add_references(&item_id, &paths)
+}
+
+#[tauri::command]
+fn remove_reference(
+    state: State<'_, Shared>,
+    item_id: String,
+    reference_id: String,
+) -> Result<ItemInfo, String> {
+    lock(&state)?.remove_reference(&item_id, &reference_id)
+}
+
+#[tauri::command]
+fn make_primary_reference(
+    state: State<'_, Shared>,
+    item_id: String,
+    reference_id: String,
+) -> Result<ItemInfo, String> {
+    lock(&state)?.make_primary_reference(&item_id, &reference_id)
+}
+
+#[tauri::command]
+fn set_design_notes(
+    state: State<'_, Shared>,
+    item_id: String,
+    notes: Option<String>,
+) -> Result<ItemInfo, String> {
+    lock(&state)?.set_design_notes(&item_id, notes)
+}
+
+/// Has the AI study every photo of a piece and write its design notes.
+#[tauri::command]
+async fn analyze_item(state: State<'_, Shared>, item_id: String) -> Result<ItemInfo, String> {
+    service::analyze_item(&state, &item_id).await
 }
 
 #[tauri::command]
@@ -255,6 +298,11 @@ fn main() {
             add_items,
             update_item,
             remove_item,
+            add_references,
+            remove_reference,
+            make_primary_reference,
+            set_design_notes,
+            analyze_item,
             set_output_status,
             remove_output,
             set_output_crop,

@@ -206,6 +206,7 @@ pub fn plan(
                 style,
                 reference_count: 1,
                 user_note: note,
+                design_notes: None,
             };
             match build_prompt(&request) {
                 Ok(prompt) => item_styles.push(PlannedStyle {

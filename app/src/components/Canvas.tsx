@@ -281,15 +281,24 @@ function Tag({ children, side = 'left' }: { children: string; side?: 'left' | 'r
 const paneClass = 'relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden p-4';
 
 function EmptyState() {
-  const { openPhotos, settings, setDialog } = useStudio();
+  const { openPhotos, openPiece, settings, setDialog } = useStudio();
   return (
     <div className="flex flex-1 items-center justify-center p-10">
       <div className="flex w-[440px] flex-col items-center gap-3 rounded-lg border border-dashed border-edge px-8 py-12 text-center">
         <p className="text-[15px] font-semibold">Drop jewelry photos here</p>
         <p className="text-dim">JPG, PNG or WebP. Your original files are never changed.</p>
-        <Button variant="primary" onClick={openPhotos}>
-          Open Photos...
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="primary" onClick={openPhotos}>
+            Open Photos...
+          </Button>
+          <Button onClick={openPiece} title="Choose several photos of the same piece; the first becomes the main photo">
+            Open Photos of One Piece...
+          </Button>
+        </div>
+        <p className="text-[11px] text-dim">
+          Each photo opens as its own piece. To give the AI several angles of one piece, use the second button or
+          "Add angle" in Properties.
+        </p>
         {settings && !settings.hasApiKey && (
           <p className="mt-3 text-dim">
             Before generating, add your Gemini API key in{' '}
@@ -447,7 +456,9 @@ export function Canvas() {
       {progress && (
         <div className="pointer-events-none absolute top-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-edge bg-panel/95 px-3 py-1.5 shadow-lg">
           <Spinner />
-          Generating {Math.min(progress.done + 1, progress.total)} of {progress.total}...
+          {progress.phase === 'studying'
+            ? `Studying ${activeItem.references.length} photo${activeItem.references.length === 1 ? '' : 's'} of this piece...`  
+            : `Generating ${Math.min(progress.done + 1, progress.total)} of ${progress.total}...`}
         </div>
       )}
     </div>

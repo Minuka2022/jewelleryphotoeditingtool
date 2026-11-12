@@ -109,10 +109,29 @@ export interface ItemInfo {
   width: number;
   height: number;
   createdAt: string;
-  /** Full path of the prepared reference photo. */
+  /** Full path of the primary reference photo. */
   reference: string;
+  /** Every photo of this piece, the primary one first. */
+  references: ReferenceInfo[];
+  /** What the AI found when it studied the photos, or the user's corrections. */
+  designNotes: string | null;
   outputs: OutputInfo[];
 }
+
+export interface ReferenceInfo {
+  id: string;
+  path: string;
+  width: number;
+  height: number;
+}
+
+export interface AddReferencesResult {
+  item: ItemInfo;
+  errors: string[];
+}
+
+/** The most photos one piece can have. */
+export const MAX_REFERENCES = 6;
 
 export interface AddItemsResult {
   items: ItemInfo[];

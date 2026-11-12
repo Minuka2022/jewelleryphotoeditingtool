@@ -11,8 +11,15 @@ pub struct Pricing {
     pub checked_on: String,
     pub default_model: String,
     pub default_size: String,
+    /// Text model that studies the reference photos and writes design notes.
+    #[serde(default = "default_analysis_model")]
+    pub analysis_model: String,
     #[serde(rename = "model")]
     pub models: Vec<ModelPricing>,
+}
+
+fn default_analysis_model() -> String {
+    "gemini-flash-latest".into()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -12,6 +12,33 @@ pub struct PromptRequest<'a> {
     /// How many reference photos will be attached.
     pub reference_count: usize,
     pub user_note: Option<&'a str>,
+    /// What the piece looks like, written after studying every reference photo.
+    pub design_notes: Option<&'a str>,
+}
+
+/// The request that asks the AI to study the reference photos and describe
+/// the piece. Its answer becomes the piece's design notes.
+pub fn analysis_prompt(
+    master: &MasterPrompts,
+    category: &JewelryCategory,
+    reference_count: usize,
+) -> String {
+    let mut text = master
+        .analysis
+        .prompt
+        .trim()
+        .replace(ITEM_PLACEHOLDER, category.noun.trim());
+    if reference_count > 1 {
+        text.push_str(&format!(
+            "\n\nThere are {reference_count} photos. Combine what each one shows; \
+             details hidden in one photo may be visible in another."
+        ));
+    }
+    text.push_str(&format!(
+        "\n\nDetails that matter most for this kind of piece: {}",
+        category.focus.trim()
+    ));
+    text
 }
 
 /// The finished prompt, with the versions of the wording that produced it.
@@ -78,6 +105,18 @@ pub fn build_prompt(request: &PromptRequest<'_>) -> Result<BuiltPrompt, PromptEr
     text.push_str("\n\nDETAILS TO PROTECT:\n");
     text.push_str(&fill(&category.focus));
 
+    let notes = request
+        .design_notes
+        .map(str::trim)
+        .filter(|notes| !notes.is_empty());
+    if let Some(notes) = notes {
+        text.push_str(
+            "\n\nDESIGN NOTES (written after studying every reference photo; \
+             where a note and a photo differ, follow the photo):\n",
+        );
+        text.push_str(notes);
+    }
+
     text.push_str("\n\nSCENE:\n");
     text.push_str(&fill(&style.prompt));
 
@@ -125,6 +164,7 @@ mod tests {
             style: library.style("black-velvet").unwrap(),
             reference_count: 1,
             user_note: Some("  slightly warmer light  "),
+            design_notes: None,
         })
         .unwrap();
 
@@ -164,6 +204,7 @@ mod tests {
                     style,
                     reference_count: 1,
                     user_note: None,
+                    design_notes: None,
                 })
                 .unwrap();
                 assert!(prompt.text.contains(&category.noun));
@@ -184,6 +225,7 @@ mod tests {
                 style,
                 reference_count: 1,
                 user_note: None,
+                design_notes: None,
             })
             .unwrap()
             .text
@@ -208,6 +250,53 @@ mod tests {
     }
 
     #[test]
+    fn design_notes_follow_the_details_to_protect() {
+        let library = shipped_library();
+        let notes =
+            "Yellow gold band; oval blue centre stone with 4 prongs; halo of 12 round diamonds.";
+        let prompt = build_prompt(&PromptRequest {
+            master: &library.master,
+            category: library.category("ring").unwrap(),
+            style: library.style("studio-white").unwrap(),
+            reference_count: 3,
+            user_note: None,
+            design_notes: Some(notes),
+        })
+        .unwrap()
+        .text;
+        let protect = prompt.find("DETAILS TO PROTECT").unwrap();
+        let design = prompt.find("DESIGN NOTES").unwrap();
+        let scene = prompt.find("SCENE:").unwrap();
+        assert!(protect < design && design < scene, "{prompt}");
+        assert!(prompt.contains(notes));
+        assert!(prompt.contains("where a note and a photo differ, follow the photo"));
+
+        let without = build_prompt(&PromptRequest {
+            master: &library.master,
+            category: library.category("ring").unwrap(),
+            style: library.style("studio-white").unwrap(),
+            reference_count: 1,
+            user_note: None,
+            design_notes: Some("   "),
+        })
+        .unwrap()
+        .text;
+        assert!(!without.contains("DESIGN NOTES"));
+    }
+
+    #[test]
+    fn the_analysis_request_names_the_piece_and_counts_the_photos() {
+        let library = shipped_library();
+        let ring = library.category("ring").unwrap();
+        let several = analysis_prompt(&library.master, ring, 4);
+        assert!(several.contains("the same ring"), "{several}");
+        assert!(several.contains("There are 4 photos."));
+        assert!(several.contains("prongs"));
+        assert!(!several.contains("{item}"));
+        assert!(!analysis_prompt(&library.master, ring, 1).contains("There are"));
+    }
+
+    #[test]
     fn several_references_use_the_multi_photo_task() {
         let library = shipped_library();
         let prompt = build_prompt(&PromptRequest {
@@ -216,6 +305,7 @@ mod tests {
             style: library.style("studio-white").unwrap(),
             reference_count: 3,
             user_note: None,
+            design_notes: None,
         })
         .unwrap();
         assert!(prompt
@@ -233,6 +323,7 @@ mod tests {
             style: library.style("studio-white").unwrap(),
             reference_count: 1,
             user_note: Some(note),
+            design_notes: None,
         })
         .unwrap();
         assert!(prompt.text.contains(note), "{}", prompt.text);
@@ -249,6 +340,7 @@ mod tests {
             style: &style,
             reference_count: 1,
             user_note: None,
+            design_notes: None,
         })
         .unwrap_err();
         assert!(matches!(error, PromptError::StyleNotForCategory { .. }));

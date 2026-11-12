@@ -98,6 +98,15 @@ pub trait ImageGenerator: Send + Sync {
     ) -> impl Future<Output = Result<GenerateOutput, GenerateError>> + Send;
 }
 
+/// Anything that can look at photos and answer in words. Used to study the
+/// reference photos before generating. The request's image settings are ignored.
+pub trait ImageDescriber: Send + Sync {
+    fn describe(
+        &self,
+        request: &GenerateRequest,
+    ) -> impl Future<Output = Result<String, GenerateError>> + Send;
+}
+
 /// Holds the API key, so it deliberately does not implement `Debug`.
 #[derive(Clone)]
 pub struct GeminiClient {
@@ -191,6 +200,64 @@ impl ImageGenerator for GeminiClient {
             }
         }
     }
+}
+
+impl GeminiClient {
+    async fn describe_once(&self, request: &GenerateRequest) -> Result<String, GenerateError> {
+        let text_only = GenerateRequest {
+            aspect_ratio: None,
+            image_size: None,
+            ..request.clone()
+        };
+        let url = format!("{}/interactions", self.base_url);
+        let body = self
+            .send(self.http.post(url).json(&request_body(&text_only)))
+            .await?;
+        let value: Value =
+            serde_json::from_str(&body).map_err(|e| GenerateError::BadResponse(e.to_string()))?;
+        parse_text(value)
+    }
+}
+
+impl ImageDescriber for GeminiClient {
+    async fn describe(&self, request: &GenerateRequest) -> Result<String, GenerateError> {
+        let mut delays = RETRY_DELAYS.iter();
+        loop {
+            let error = match self.describe_once(request).await {
+                Ok(text) => return Ok(text),
+                Err(error) => error,
+            };
+            match delays.next() {
+                Some(delay) if error.is_retryable() => tokio::time::sleep(*delay).await,
+                _ => return Err(error),
+            }
+        }
+    }
+}
+
+/// The model's written answer: every text block of its output, in order.
+fn parse_text(mut body: Value) -> Result<String, GenerateError> {
+    let steps = body.get("steps").and_then(Value::as_array);
+    let text: Vec<&str> = steps
+        .into_iter()
+        .flatten()
+        .filter(|step| step.get("type").and_then(Value::as_str) == Some("model_output"))
+        .filter_map(|step| step.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect();
+    if !text.is_empty() {
+        return Ok(text.join("\n"));
+    }
+    let reason = no_image_reason(&body, &[]);
+    redact_image_data(&mut body);
+    Err(GenerateError::NoImage {
+        reason: format!("no written answer ({reason})"),
+        response: serde_json::to_string_pretty(&body).unwrap_or_default(),
+    })
 }
 
 fn request_body(request: &GenerateRequest) -> Value {
@@ -522,6 +589,39 @@ mod tests {
             "<html>Bad gateway</html>"
         );
         assert_eq!(api_error_message("  "), "no details given");
+    }
+
+    #[test]
+    fn a_written_answer_is_collected_from_the_model_output() {
+        let response = json!({
+            "status": "completed",
+            "steps": [
+                { "type": "thought", "content": [{ "type": "text", "text": "thinking..." }] },
+                { "type": "model_output", "content": [
+                    { "type": "text", "text": " - Yellow gold band " },
+                    { "type": "text", "text": "- Oval blue stone, 4 prongs" }
+                ]}
+            ]
+        });
+        assert_eq!(
+            parse_text(response).unwrap(),
+            "- Yellow gold band\n- Oval blue stone, 4 prongs"
+        );
+
+        let silent = json!({ "status": "failed", "steps": [] });
+        let error = parse_text(silent).unwrap_err();
+        assert!(error.to_string().contains("no written answer"), "{error}");
+    }
+
+    #[test]
+    fn a_text_request_asks_for_no_image() {
+        let body = request_body(&GenerateRequest {
+            image_size: None,
+            aspect_ratio: None,
+            ..request()
+        });
+        assert!(body.get("response_format").is_none());
+        assert_eq!(body["input"].as_array().unwrap().len(), 3);
     }
 
     #[test]

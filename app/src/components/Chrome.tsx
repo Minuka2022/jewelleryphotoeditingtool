@@ -29,6 +29,7 @@ export function MenuBar() {
   const menus: Record<string, (MenuItem | 'divider')[]> = {
     File: [
       { label: 'Open Photos...', shortcut: 'Ctrl+O', run: studio.openPhotos },
+      { label: 'Open Photos of One Piece...', run: studio.openPiece },
       { label: 'Import Style...', run: () => studio.openStyleDialog() },
       { label: 'Export As...', shortcut: 'Ctrl+Shift+E', run: studio.openExport },
       'divider',
@@ -170,7 +171,8 @@ export function OptionsBar() {
 
   let generateLabel = 'Generate';
   if (progress) {
-    generateLabel = `Generating ${progress.done}/${progress.total}`;
+    generateLabel =
+      progress.phase === 'studying' ? 'Studying photos...' : `Generating ${progress.done}/${progress.total}`;
   } else if (plannedImages > 0) {
     const cost = plannedCost === null ? '' : `  -  about ${formatUsd(plannedCost)}`;
     generateLabel = `Generate ${plannedImages} image${plannedImages === 1 ? '' : 's'}${cost}`;

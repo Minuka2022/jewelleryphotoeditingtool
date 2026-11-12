@@ -24,9 +24,17 @@ pub const FALLBACK_CATEGORY: &str = "jewelry";
 #[serde(deny_unknown_fields)]
 pub struct MasterPrompts {
     pub version: u32,
+    /// How the AI studies the reference photos before generating.
+    pub analysis: AnalysisPrompt,
     pub global: GlobalPrompt,
     #[serde(rename = "category")]
     pub categories: Vec<JewelryCategory>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisPrompt {
+    pub prompt: String,
 }
 
 /// Layer 1: sent with every request.
@@ -427,10 +435,18 @@ fn validate_master(master: &MasterPrompts) -> Result<(), String> {
     if finishes.iter().any(|text| text.trim().is_empty()) {
         return Err("[global] finish_photo and finish_render must not be empty".into());
     }
-    let global_texts = [&global.role, &global.task, &global.task_multi]
-        .into_iter()
-        .chain(finishes)
-        .chain(&global.rules);
+    if master.analysis.prompt.trim().is_empty() {
+        return Err("[analysis] prompt must not be empty".into());
+    }
+    let global_texts = [
+        &global.role,
+        &global.task,
+        &global.task_multi,
+        &master.analysis.prompt,
+    ]
+    .into_iter()
+    .chain(finishes)
+    .chain(&global.rules);
     for text in global_texts {
         check_placeholders(text).map_err(|message| format!("[global] {message}"))?;
     }

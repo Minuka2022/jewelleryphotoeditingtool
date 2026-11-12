@@ -78,6 +78,13 @@ export interface Confirmation {
 
 export const FIT: View = { zoom: 1, x: 0, y: 0 };
 
+/** What a photo is busy with: the AI studying its photos, or generating. */
+export interface Busy {
+  done: number;
+  total: number;
+  phase: 'studying' | 'generating';
+}
+
 /** Batches that cost at least this much ask for confirmation first. */
 const CONFIRM_ABOVE_USD = 1;
 
@@ -114,7 +121,7 @@ function useController() {
   const [zoomPercent, setZoomPercent] = useState(100);
 
   // Per photo that is generating: how many images are done out of how many.
-  const [busy, setBusy] = useState<Record<string, { done: number; total: number }>>({});
+  const [busy, setBusy] = useState<Record<string, Busy>>({});
   const [dialog, setDialog] = useState<DialogName | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -164,7 +171,7 @@ function useController() {
     const stopListening = api.onProgress((progress) => {
       setBusy((current) =>
         current[progress.itemId]
-          ? { ...current, [progress.itemId]: { done: progress.done, total: progress.total } }
+          ? { ...current, [progress.itemId]: { done: progress.done, total: progress.total, phase: 'generating' } }
           : current,
       );
       if (progress.error) {
@@ -252,6 +259,111 @@ function useController() {
     }
   }, [addPhotos, fail]);
 
+  /** Opens several photos as views of one piece: the first is the main one. */
+  const openPiece = useCallback(async () => {
+    try {
+      const [first, ...others] = await api.pickPhotos();
+      if (!first) return;
+      const result = await api.addItems([first], lastCategory);
+      result.errors.forEach((error) => notify('error', error));
+      const created = result.items[0];
+      if (!created) return;
+      let item = created;
+      if (others.length > 0) {
+        const more = await api.addReferences(created.id, others);
+        more.errors.forEach((error) => notify('error', error));
+        item = more.item;
+      }
+      setItems((list) => [...list, item]);
+      selectItem(item.id);
+    } catch (error) {
+      fail(error);
+    }
+  }, [lastCategory, selectItem, notify, fail]);
+
+  const notesMayBeStale = useCallback(
+    (item: ItemInfo) => {
+      if (item.designNotes) {
+        notify('info', 'The photos changed. Press "Study photos" to update the design notes.');
+      }
+    },
+    [notify],
+  );
+
+  const addReferencePhotos = useCallback(
+    async (item: ItemInfo) => {
+      try {
+        const paths = await api.pickPhotos();
+        if (paths.length === 0) return;
+        const result = await api.addReferences(item.id, paths);
+        putItem(result.item);
+        result.errors.forEach((error) => notify('error', error));
+        notesMayBeStale(result.item);
+      } catch (error) {
+        fail(error);
+      }
+    },
+    [putItem, notify, notesMayBeStale, fail],
+  );
+
+  const removeReference = useCallback(
+    (item: ItemInfo, referenceId: string) => {
+      setConfirmation({
+        title: 'Remove this photo from the piece?',
+        body: 'The copy kept by Jewelry Studio is deleted. Your original file is not affected.',
+        action: 'Remove',
+        danger: true,
+        run: async () => {
+          try {
+            const updated = await api.removeReference(item.id, referenceId);
+            putItem(updated);
+            notesMayBeStale(updated);
+          } catch (error) {
+            fail(error);
+          }
+        },
+      });
+    },
+    [putItem, notesMayBeStale, fail],
+  );
+
+  const makePrimaryReference = useCallback(
+    async (item: ItemInfo, referenceId: string) => {
+      try {
+        putItem(await api.makePrimaryReference(item.id, referenceId));
+      } catch (error) {
+        fail(error);
+      }
+    },
+    [putItem, fail],
+  );
+
+  const saveDesignNotes = useCallback(
+    async (item: ItemInfo, notes: string) => {
+      try {
+        putItem(await api.setDesignNotes(item.id, notes.trim() || null));
+      } catch (error) {
+        fail(error);
+      }
+    },
+    [putItem, fail],
+  );
+
+  /** Has the AI study every photo of a piece and write its design notes. */
+  const studyPhotos = useCallback(
+    async (item: ItemInfo) => {
+      setBusy((current) => ({ ...current, [item.id]: { done: 0, total: 0, phase: 'studying' } }));
+      try {
+        putItem(await api.analyzeItem(item.id));
+      } catch (error) {
+        fail(error);
+      } finally {
+        setBusy(({ [item.id]: _finished, ...rest }) => rest);
+      }
+    },
+    [putItem, fail],
+  );
+
   const updateItem = useCallback(
     async (id: string, patch: { name?: string; category?: string }) => {
       try {
@@ -335,8 +447,17 @@ function useController() {
     const itemId = activeItem.id;
     const total = usableStyles.length * settings.variants;
     runErrors.current[itemId] = [];
-    setBusy((current) => ({ ...current, [itemId]: { done: 0, total } }));
     try {
+      // The AI studies all the photos first, unless that was already done.
+      if (!activeItem.designNotes) {
+        setBusy((current) => ({ ...current, [itemId]: { done: 0, total, phase: 'studying' } }));
+        try {
+          putItem(await api.analyzeItem(itemId));
+        } catch (error) {
+          notify('error', `The photos could not be studied first, so this run has no design notes. ${errorText(error)}`);
+        }
+      }
+      setBusy((current) => ({ ...current, [itemId]: { done: 0, total, phase: 'generating' } }));
       putItem(
         await api.generate({
           itemId,
@@ -575,6 +696,12 @@ function useController() {
     stepOutput,
     addPhotos,
     openPhotos,
+    openPiece,
+    addReferencePhotos,
+    removeReference,
+    makePrimaryReference,
+    saveDesignNotes,
+    studyPhotos,
     updateItem,
     removeItem,
     setStatus,

@@ -10,7 +10,27 @@
 # Bump "version" whenever you change the wording, so every generated image
 # records which wording produced it.
 
-version = 3
+version = 4
+
+# Before generating, the AI studies every reference photo of the piece and
+# writes design notes with this request. The notes are shown to the user,
+# can be corrected, and are sent with every generation of that piece.
+[analysis]
+prompt = """
+You are a jewelry expert cataloguing a piece for a product photographer. The attached photos all \
+show the same {item}, possibly from different angles. Study every photo closely and write precise \
+design notes that would let someone reproduce this exact {item} without seeing it:
+- overall form and silhouette
+- metal colour or colours, and finish (polished, brushed, textured)
+- every stone: how many, shape and cut, colour, size relative to the piece, how it is set (prongs, \
+bezel, pavé, channel) and how many prongs, and how the stones are arranged
+- band, chain, link or frame structure and profile
+- engravings, textures, patterns, milgrain, filigree, openwork
+- clasp, bail, posts, backs or hinges if visible
+- anything asymmetric or unusual
+Describe only what you can see; write "not visible" rather than guess. Do not describe the \
+background, lighting, hands, stands or props. Answer as short factual lines starting with "- ", \
+in plain text without bold, headings or other formatting, at most 160 words."""
 
 [global]
 role = "You are a professional jewelry product photographer and retoucher."

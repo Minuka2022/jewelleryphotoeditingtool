@@ -1,10 +1,11 @@
 // The right-hand column (Properties, Styles, History) and the filmstrip of
 // generated images under the work area.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import { formatUsd, styleFits, useStudio } from '../store';
+import { MAX_REFERENCES } from '../types';
 import type { ItemInfo, OutputInfo, StyleInfo, Tone } from '../types';
 import { Icon, Select, Spinner, cx, inputClass } from '../ui';
 
@@ -30,6 +31,120 @@ function Section({
   );
 }
 
+/** Every photo of the piece. The first is the main one, whose angle results follow. */
+function ReferencePhotos({ item }: { item: ItemInfo }) {
+  const { addReferencePhotos, removeReference, makePrimaryReference, busy } = useStudio();
+  const full = item.references.length >= MAX_REFERENCES;
+  const locked = Boolean(busy[item.id]);
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] text-dim" data-reference-count>
+          Photos of this piece ({item.references.length}/{MAX_REFERENCES})
+        </span>
+        <button
+          type="button"
+          disabled={full || locked}
+          title={full ? `A piece can have at most ${MAX_REFERENCES} photos` : 'Add photos of the same piece from other angles'}
+          onClick={() => addReferencePhotos(item)}
+          className="flex items-center gap-1 text-[11px] text-accent hover:brightness-125 disabled:opacity-40"
+        >
+          <Icon name="plus" size={11} /> Add angle
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {item.references.map((reference, index) => {
+          const primary = index === 0;
+          return (
+            <div key={reference.id} className="group relative" data-reference={primary ? 'main' : 'extra'}>
+              <img
+                src={api.fileSrc(reference.path)}
+                alt={primary ? 'Main photo' : `Photo ${index + 1}`}
+                title={primary ? 'Main photo: results follow its viewing angle' : 'Extra view: helps the AI understand the design'}
+                className={cx(
+                  'h-12 w-12 rounded border-2 bg-canvas object-cover',
+                  primary ? 'border-accent' : 'border-edge',
+                )}
+              />
+              {primary && (
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 rounded-b bg-accent/90 text-center text-[9px] leading-3 font-semibold text-white">
+                  MAIN
+                </span>
+              )}
+              {!primary && !locked && (
+                <div className="absolute inset-0 hidden flex-col items-center justify-center gap-0.5 rounded bg-black/70 group-focus-within:flex group-hover:flex">
+                  <button
+                    type="button"
+                    aria-label={`Make photo ${index + 1} the main photo`}
+                    title="Make this the main photo"
+                    onClick={() => makePrimaryReference(item, reference.id)}
+                    className="rounded px-1 text-[9px] font-semibold text-white hover:bg-accent"
+                  >
+                    MAIN
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Remove photo ${index + 1}`}
+                    title="Remove this photo"
+                    onClick={() => removeReference(item, reference.id)}
+                    className="rounded p-0.5 text-ink hover:text-bad"
+                  >
+                    <Icon name="trash" size={11} />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {item.references.length === 1 && (
+        <p className="mt-1 text-[11px] leading-snug text-dim">
+          More angles (side, top, back) help the AI copy the design exactly.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What the AI found when it studied the photos, editable. */
+function DesignNotes({ item }: { item: ItemInfo }) {
+  const { saveDesignNotes, studyPhotos, busy } = useStudio();
+  const [text, setText] = useState(item.designNotes ?? '');
+  useEffect(() => setText(item.designNotes ?? ''), [item.designNotes]);
+  const progress = busy[item.id];
+  const studying = progress?.phase === 'studying';
+  const photos = item.references.length;
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] text-dim">Design notes</span>
+        <button
+          type="button"
+          disabled={Boolean(progress)}
+          onClick={() => studyPhotos(item)}
+          title={`The AI studies all ${photos} photo(s) and describes the design. A text answer costs a small fraction of one image.`}
+          className="flex items-center gap-1 text-[11px] text-accent hover:brightness-125 disabled:opacity-40"
+        >
+          {studying ? <Spinner size={10} /> : <Icon name="zoom" size={11} />}
+          {studying ? 'Studying...' : item.designNotes ? 'Study again' : 'Study photos'}
+        </button>
+      </div>
+      <textarea
+        aria-label="Design notes"
+        className={cx(inputClass, 'h-24 resize-y text-[11px] leading-snug')}
+        placeholder={`Press "Study photos" and the AI describes this piece from all ${photos} photo(s): metal, stones, prongs, engravings. This happens by itself before the first generation. You can correct it.`}
+        value={text}
+        disabled={studying}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={() => text.trim() !== (item.designNotes ?? '') && saveDesignNotes(item, text)}
+      />
+      <p className="text-[11px] leading-snug text-dim">Sent with every generation of this piece.</p>
+    </div>
+  );
+}
+
 function Properties({ item }: { item: ItemInfo }) {
   const { library, updateItem } = useStudio();
   const [name, setName] = useState(item.name);
@@ -39,16 +154,11 @@ function Properties({ item }: { item: ItemInfo }) {
   };
 
   return (
-    <div className="flex gap-3 p-3">
-      <img
-        src={api.fileSrc(item.reference)}
-        alt="Reference photo"
-        className="h-20 w-20 shrink-0 rounded border border-edge bg-canvas object-contain"
-      />
-      <div className="min-w-0 flex-1 space-y-2">
+    <div className="max-h-[52vh] space-y-2.5 overflow-y-auto p-3">
+      <div className="flex gap-2">
         <input
           aria-label="Photo name"
-          className={inputClass}
+          className={cx(inputClass, 'flex-1')}
           value={name}
           onChange={(event) => setName(event.target.value)}
           onBlur={commit}
@@ -56,7 +166,7 @@ function Properties({ item }: { item: ItemInfo }) {
         />
         <Select
           aria-label="Jewelry type"
-          className="w-full"
+          className="h-[26px] w-28"
           value={item.category}
           onChange={(event) => updateItem(item.id, { category: event.target.value })}
         >
@@ -66,10 +176,12 @@ function Properties({ item }: { item: ItemInfo }) {
             </option>
           ))}
         </Select>
-        <p className="text-[11px] text-dim">
-          {item.width} x {item.height} px, {item.outputs.length} generated
-        </p>
       </div>
+      <ReferencePhotos item={item} />
+      <DesignNotes key={item.id} item={item} />
+      <p className="text-[11px] text-dim">
+        Main photo {item.width} x {item.height} px, {item.outputs.length} generated
+      </p>
     </div>
   );
 }
